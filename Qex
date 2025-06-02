@@ -1,0 +1,2683 @@
+-- QEX - COMPLETE with Updated MM2 Remotes
+-- Version 5.3 - Fixed Fling System + Debug Feature
+-- Updated with current Murder Mystery 2 remotes
+-- Integrated Coin Farmer by Zo (V3) with UI
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
+local StarterGui = game:GetService("StarterGui")
+local TextChatService = game:GetService("TextChatService")
+
+-- Core Variables
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local camera = Workspace.CurrentCamera
+local mouse = player:GetMouse()
+local gravity = workspace.Gravity
+
+-- Configuration
+local CONFIG = {
+    Colors = {
+        Primary = Color3.fromRGB(15, 15, 25),
+        Secondary = Color3.fromRGB(25, 25, 40),
+        Tertiary = Color3.fromRGB(35, 35, 55),
+        Accent = Color3.fromRGB(120, 160, 255),
+        AccentHover = Color3.fromRGB(140, 180, 255),
+        Success = Color3.fromRGB(100, 255, 150),
+        Warning = Color3.fromRGB(255, 200, 100),
+        Danger = Color3.fromRGB(255, 100, 120),
+        Text = Color3.fromRGB(255, 255, 255),
+        TextSecondary = Color3.fromRGB(180, 180, 200),
+        Murderer = Color3.fromRGB(255, 80, 100),
+        Sheriff = Color3.fromRGB(80, 150, 255),
+        Innocent = Color3.fromRGB(100, 255, 150),
+        GunDrop = Color3.fromRGB(255, 220, 100),
+        Coin = Color3.fromRGB(255, 200, 50)
+    },
+    Version = "5.3",
+    UpdateRate = 0.1
+}
+
+-- Device Detection
+local deviceType = ""
+local screenSize = camera.ViewportSize
+
+if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+    deviceType = screenSize.X < 768 and "Mobile" or "Tablet"
+else
+    deviceType = "Desktop"
+end
+
+-- Responsive Functions
+local function getSize(mobile, tablet, desktop)
+    return deviceType == "Mobile" and mobile or deviceType == "Tablet" and tablet or desktop
+end
+
+local function getFontSize(type)
+    local sizes = {
+        Mobile = {Title = 18, Subtitle = 14, Button = 12, Text = 10},
+        Tablet = {Title = 22, Subtitle = 16, Button = 14, Text = 12},
+        Desktop = {Title = 26, Subtitle = 18, Button = 16, Text = 14}
+    }
+    return sizes[deviceType][type] or sizes.Desktop[type]
+end
+
+-- Game State Management
+local gameState = {
+    -- UI State
+    uiVisible = true,
+    currentTab = "Home",
+    
+    -- Player Data
+    murderer = nil,
+    sheriff = nil,
+    innocents = {},
+    targetPlayer = nil,
+    spectatingPlayer = nil,
+    
+    -- Game Objects
+    gunDrop = nil,
+    coins = {},
+    
+    -- Feature States
+    espEnabled = false,
+    noclipEnabled = false,
+    flyEnabled = false,
+    speedEnabled = false,
+    infiniteJumpEnabled = false,
+    invisibilityEnabled = false,
+    flingEnabled = false, -- New fling state
+    
+    -- Aimbot Settings
+    aimbotEnabled = false,
+    silentAimEnabled = false,
+    aimTarget = nil,
+    aimFOV = 90,
+    aimSmoothing = 5,
+    currentAimModel = "QEX-X5",
+    predictJump = true,
+    predictAirShot = true,
+    
+    -- Shooting Settings
+    autoShootEnabled = false,
+    manualShootEnabled = false,
+    shootDelay = 0.1,
+    
+    -- Knife Settings
+    autoThrowEnabled = false,
+    manualThrowEnabled = false,
+    throwDelay = 0.5,
+    currentKnifeModel = "QEX-MAX3",
+    killAuraEnabled = false,
+    killAuraRange = 15,
+    
+    -- Auto Features
+    coinFarmEnabled = false,
+    gunFarmEnabled = false,
+    killAllEnabled = false,
+    
+    -- ESP Options
+    showRoles = true,
+    showDistance = true,
+    showHealth = true,
+    showBoxes = false,
+    showTracers = false,
+    showChams = true,
+    gunDropESP = false,
+    coinESP = false,
+    
+    -- Movement Settings
+    walkSpeed = 50,
+    jumpPower = 100,
+    flySpeed = 50,
+    
+    -- New Features
+    autoPickupCoins = false,
+    autoPickupGun = false,
+    easyAimbot = false,
+    chatEnabled = true,
+    noobMode = false,
+    debugMode = false, -- New debug state
+    
+    -- Coin Farming
+    coinFarmSpeed = 2,
+    
+    -- Storage
+    connections = {},
+    highlights = {},
+    boxes = {},
+    tracers = {},
+    labels = {},
+    notifications = {},
+    chatMessages = {},
+    
+    -- Performance
+    lastUpdate = tick(),
+    updateInterval = CONFIG.UpdateRate
+}
+
+-- Coin Farming Variables
+local coinRemote = nil
+
+-- Fling system variables
+local flingParts = {}
+local flingVelocity = Vector3.new(0, 0, 0)
+
+-- Debug logging function
+local function debugLog(message)
+    if gameState.debugMode then
+        print("[DEBUG] " .. message)
+        createNotification("DEBUG", message, 3, "info")
+    end
+end
+
+-- Prediction function for target movement
+local function predictPosition(targetPlayer, position, predictJump, predictAirShot, deltaTime)
+    if not targetPlayer or not position then
+        return position
+    end
+
+    local predictedPos = position
+    local targetCharacter = targetPlayer.Character
+    if not targetCharacter then
+        return predictedPos
+    end
+
+    local rootPart = targetCharacter:FindFirstChild("HumanoidRootPart")
+    local humanoid = targetCharacter:FindFirstChild("Humanoid")
+    if not rootPart or not humanoid then
+        return predictedPos
+    end
+
+    if predictJump and (humanoid.Jump or rootPart.Velocity.Y > 10) then
+        predictedPos = predictedPos + Vector3.new(0, 5, 0)
+    end
+
+    if predictAirShot and humanoid.FloorMaterial == Enum.Material.Air then
+        local velocity = rootPart.Velocity
+        predictedPos = predictedPos + velocity * deltaTime + Vector3.new(0, -0.5 * gravity * deltaTime * deltaTime, 0)
+    end
+
+    return predictedPos
+end
+
+-- Updated MM2 Remote Functions
+-- Function to invoke gun tweak
+local function invokeGunTweak(position)
+    if player.Character and player.Character:FindFirstChild("Gun") then
+        local args = {
+            [1] = 1,
+            [2] = position,
+            [3] = "AH2"
+        }
+        local success, err = pcall(function()
+            player.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
+        end)
+        if not success then
+            warn("Gun tweak invocation failed: " .. tostring(err))
+            debugLog("Gun tweak failed: " .. tostring(err))
+            return false
+        end
+        return true
+    end
+    return false
+end
+
+-- Function to invoke knife stab
+local function invokeKnifeStab()
+    if player.Character and player.Character:FindFirstChild("Knife") then
+        local success, err = pcall(function()
+            local args = { [1] = "Slash" }
+            player:WaitForChild("Stab"):FireServer(unpack(args))
+        end)
+        if not success then
+            warn("Knife stab invocation failed: " .. tostring(err))
+            debugLog("Knife stab failed: " .. tostring(err))
+            return false
+        end
+        return true
+    end
+    return false
+end
+
+-- Function to invoke knife throw
+local function invokeKnifeThrow(targetPosition)
+    if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        local originCFrame = player.Character.HumanoidRootPart.CFrame
+        local success, err = pcall(function()
+            local args = {
+                [1] = originCFrame,
+                [2] = targetPosition
+            }
+            player:WaitForChild("Throw"):FireServer(unpack(args))
+        end)
+        if not success then
+            warn("Knife throw invocation failed: " .. tostring(err))
+            debugLog("Knife throw failed: " .. tostring(err))
+            return false
+        end
+        return true
+    end
+    return false
+end
+
+-- Utility Functions
+local function createNotification(title, message, duration, type)
+    duration = duration or 3
+    type = type or "info"
+    
+    local typeColors = {
+        info = CONFIG.Colors.Accent,
+        success = CONFIG.Colors.Success,
+        warning = CONFIG.Colors.Warning,
+        error = CONFIG.Colors.Danger
+    }
+    
+    local notification = Instance.new("Frame")
+    notification.Name = "QEXNotification"
+    notification.Size = getSize(
+        UDim2.new(0, 280, 0, 70),
+        UDim2.new(0, 300, 0, 80),
+        UDim2.new(0, 320, 0, 90)
+    )
+    notification.Position = UDim2.new(1, 20, 0, 50 + (#gameState.notifications * 100))
+    notification.BackgroundColor3 = CONFIG.Colors.Secondary
+    notification.BorderSizePixel = 0
+    
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 12)
+    corner.Parent = notification
+    
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = typeColors[type]
+    stroke.Thickness = 2
+    stroke.Parent = notification
+    
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Size = UDim2.new(1, -20, 0, 25)
+    titleLabel.Position = UDim2.new(0, 10, 0, 5)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = title
+    titleLabel.TextColor3 = CONFIG.Colors.Text
+    titleLabel.TextSize = getFontSize("Subtitle")
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = notification
+    
+    local messageLabel = Instance.new("TextLabel")
+    messageLabel.Size = UDim2.new(1, -20, 1, -35)
+    messageLabel.Position = UDim2.new(0, 10, 0, 30)
+    messageLabel.BackgroundTransparency = 1
+    messageLabel.Text = message
+    messageLabel.TextColor3 = CONFIG.Colors.TextSecondary
+    messageLabel.TextSize = getFontSize("Text")
+    messageLabel.Font = Enum.Font.Gotham
+    messageLabel.TextXAlignment = Enum.TextXAlignment.Left
+    messageLabel.TextWrapped = true
+    messageLabel.Parent = notification
+    
+    notification.Parent = playerGui:FindFirstChild("QEXUI") or playerGui
+    table.insert(gameState.notifications, notification)
+    
+    -- Animate in
+    TweenService:Create(notification, TweenInfo.new(0.5, Enum.EasingStyle.Back), {
+        Position = UDim2.new(1, -340, 0, 50 + ((#gameState.notifications - 1) * 100))
+    }):Play()
+    
+    -- Auto remove
+    spawn(function()
+        wait(duration)
+        if notification and notification.Parent then
+            TweenService:Create(notification, TweenInfo.new(0.3), {
+                Position = UDim2.new(1, 20, 0, 50 + ((#gameState.notifications - 1) * 100)),
+                BackgroundTransparency = 1
+            }):Play()
+            wait(0.3)
+            notification:Destroy()
+            for i, notif in ipairs(gameState.notifications) do
+                if notif == notification then
+                    table.remove(gameState.notifications, i)
+                    break
+                end
+            end
+        end
+    end)
+end
+
+-- Game Detection Functions
+local function getPlayerRole(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then return "Unknown" end
+    
+    local character = targetPlayer.Character
+    local backpack = targetPlayer.Backpack
+    
+    if character:FindFirstChild("Knife") or (backpack and backpack:FindFirstChild("Knife")) then
+        return "Murderer"
+    elseif character:FindFirstChild("Gun") or (backpack and backpack:FindFirstChild("Gun")) then
+        return "Sheriff"
+    else
+        return "Innocent"
+    end
+end
+
+local function getRoleColor(role)
+    local colors = {
+        Murderer = CONFIG.Colors.Murderer,
+        Sheriff = CONFIG.Colors.Sheriff,
+        Innocent = CONFIG.Colors.Innocent,
+        Unknown = CONFIG.Colors.TextSecondary
+    }
+    return colors[role] or CONFIG.Colors.TextSecondary
+end
+
+local function getDistance(pos1, pos2)
+    return (pos1 - pos2).Magnitude
+end
+
+local function updateGameData()
+    if tick() - gameState.lastUpdate < gameState.updateInterval then return end
+    gameState.lastUpdate = tick()
+    
+    -- Update player roles
+    gameState.murderer = nil
+    gameState.sheriff = nil
+    gameState.innocents = {}
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            local role = getPlayerRole(p)
+            if role == "Murderer" then
+                gameState.murderer = p
+            elseif role == "Sheriff" then
+                gameState.sheriff = p
+            else
+                table.insert(gameState.innocents, p)
+            end
+        end
+    end
+    
+    -- Update gun drop (fixed names)
+    gameState.gunDrop = nil
+    for _, obj in ipairs(Workspace:GetChildren()) do
+        if obj:IsA("Tool") and (obj.Name == "Gun" or obj.Name == "DropGun" or obj.Name == "GunDrop") and obj:FindFirstChild("Handle") then
+            gameState.gunDrop = obj
+            break
+        end
+    end
+    
+    -- Update coins
+    gameState.coins = {}
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and (obj.Name == "Coin" or obj.Name == "CoinContainer") then
+            table.insert(gameState.coins, obj)
+        end
+    end
+    
+    -- Auto-pickup gun
+    if gameState.autoPickupGun and gameState.gunDrop and gameState.gunDrop:FindFirstChild("ClickDetector") and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        if (player.Character.HumanoidRootPart.Position - gameState.gunDrop.Handle.Position).Magnitude < 10 then
+            fireclickdetector(gameState.gunDrop.ClickDetector)
+            debugLog("Auto-picked up gun")
+        end
+    end
+end
+
+-- Find coin remote
+local function findCoinRemote()
+    for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
+        if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) and 
+           (string.find(string.lower(obj.Name), "coin") or string.find(string.lower(obj.Name), "collect")) then
+            coinRemote = obj
+            debugLog("Found coin remote: " .. obj:GetFullName())
+            break
+        end
+    end
+end
+
+-- Fling System Functions
+local function toggleFling(enabled)
+    gameState.flingEnabled = enabled
+    
+    if enabled then
+        if player.Character then
+            -- Store original parts
+            flingParts = {}
+            
+            -- Create fling effect
+            for _, part in ipairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    flingParts[part] = part.CFrame
+                    part.CanCollide = false
+                end
+            end
+            
+            -- Set fling velocity
+            flingVelocity = Vector3.new(math.random(-100, 100), 100, math.random(-100, 100))
+            debugLog("Fling activated")
+        end
+    else
+        -- Reset character
+        if player.Character then
+            for part, originalCFrame in pairs(flingParts) do
+                if part and part.Parent then
+                    part.CFrame = originalCFrame
+                    part.CanCollide = true
+                end
+            end
+            flingParts = {}
+            flingVelocity = Vector3.new(0, 0, 0)
+            debugLog("Fling deactivated")
+        end
+    end
+end
+
+-- Coin Farming Functions
+local function startCoinFarm()
+    while gameState.coinFarmEnabled do
+        local character = player.Character
+        if not character or not character:FindFirstChild("HumanoidRootPart") then
+            task.wait(1)
+        else
+            local humanoidRootPart = character.HumanoidRootPart
+
+            local coinContainer = nil
+            for _, obj in pairs(Workspace:GetDescendants()) do
+                if obj.Name == "CoinContainer" or string.find(string.lower(obj.Name), "coin") then
+                    coinContainer = obj
+                    break
+                end
+            end
+
+            if coinContainer then
+                local coins = {}
+                for _, coin in ipairs(coinContainer:GetChildren()) do
+                    if coin:IsA("BasePart") and coin:FindFirstChild("CoinVisual") then
+                        table.insert(coins, coin)
+                    end
+                end
+
+                table.sort(coins, function(a, b)
+                    return (humanoidRootPart.Position - a.Position).Magnitude < (humanoidRootPart.Position - b.Position).Magnitude
+                end)
+
+                for _, coin in ipairs(coins) do
+                    if not gameState.coinFarmEnabled then
+                        break
+                    end
+                    if coin.Parent and coin:FindFirstChild("CoinVisual") then
+                        local coinPart = coin.CoinVisual
+                        local distance = (humanoidRootPart.Position - coinPart.Position).Magnitude
+
+                        if #coins == 1 then
+                            -- Teleport
+                            humanoidRootPart.CFrame = coinPart.CFrame * CFrame.new(0, -2.5, 0)
+                            task.wait(0.2)
+                        else
+                            -- Tween
+                            local tweenInfo = TweenInfo.new(
+                                distance / (24 * gameState.coinFarmSpeed),
+                                Enum.EasingStyle.Sine,
+                                Enum.EasingDirection.Out
+                            )
+                            local tweenGoal = {CFrame = coinPart.CFrame * CFrame.new(0, -2.5, 0)}
+                            local tween = TweenService:Create(humanoidRootPart, tweenInfo, tweenGoal)
+                            tween:Play()
+                            tween.Completed:Wait()
+                        end
+
+                        -- Try to collect
+                        if coinRemote then
+                            pcall(function()
+                                if coinRemote:IsA("RemoteEvent") then
+                                    coinRemote:FireServer(coin)
+                                elseif coinRemote:IsA("RemoteFunction") then
+                                    coinRemote:InvokeServer(coin)
+                                end
+                            end)
+                        end
+
+                        -- Fallback to touch
+                        if coinPart:FindFirstChild("TouchInterest") then
+                            firetouchinterest(humanoidRootPart, coinPart, 0)
+                            firetouchinterest(humanoidRootPart, coinPart, 1)
+                        end
+
+                        humanoidRootPart.Velocity = Vector3.new(0,0,0)
+                        task.wait(0.2)
+                    end
+                end
+            else
+                debugLog("Coin container not found")
+            end
+        end
+        task.wait(0.5)
+    end
+end
+
+local function startCoinFarmNoclip()
+    while gameState.coinFarmEnabled do
+        if player.Character then
+            for _, part in ipairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = false
+                end
+            end
+        end
+        RunService.Stepped:Wait()
+    end
+end
+
+-- Aimbot Functions
+local function getClosestPlayerToMouse()
+    local closestPlayer = nil
+    local shortestDistance = math.huge
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and p.Character:FindFirstChild("Head") then
+            local screenPoint = camera:WorldToScreenPoint(p.Character.Head.Position)
+            local distance = (Vector2.new(screenPoint.X, screenPoint.Y) - Vector2.new(mouse.X, mouse.Y)).Magnitude
+            
+            if distance < shortestDistance and distance <= gameState.aimFOV then
+                shortestDistance = distance
+                closestPlayer = p
+            end
+        end
+    end
+    
+    return closestPlayer
+end
+
+local function aimAtPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("Head") then
+        return
+    end
+    
+    local targetPosition = targetPlayer.Character.Head.Position
+    
+    if gameState.silentAimEnabled then
+        -- Silent aim - doesn't move camera
+        gameState.aimTarget = targetPlayer
+    else
+        -- Regular aimbot - moves camera
+        local lookDirection = (targetPosition - camera.CFrame.Position).Unit
+        local newCFrame = CFrame.lookAt(camera.CFrame.Position, camera.CFrame.Position + lookDirection)
+        
+        if gameState.aimSmoothing > 0 then
+            -- Smooth aiming
+            camera.CFrame = camera.CFrame:Lerp(newCFrame, 1 / gameState.aimSmoothing)
+        else
+            -- Instant snap
+            camera.CFrame = newCFrame
+        end
+    end
+end
+
+-- Updated Shooting Functions using new MM2 remotes
+local function shootGun(targetPlayer)
+    if not player.Character or not player.Character:FindFirstChild("Gun") then
+        return false
+    end
+    
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("Head") then
+        return false
+    end
+    
+    -- Get predicted position
+    local targetPos = predictPosition(
+        targetPlayer,
+        targetPlayer.Character.Head.Position,
+        gameState.predictJump,
+        gameState.predictAirShot,
+        0.2
+    )
+    
+    -- Use the updated gun tweak function
+    local success = invokeGunTweak(targetPos)
+    
+    if success then
+        createNotification("Shoot", "Shot fired successfully!", 1, "success")
+        debugLog("Shot fired at " .. targetPlayer.Name)
+        return true
+    else
+        createNotification("Shoot", "Failed to shoot", 1, "error")
+        debugLog("Failed to shoot")
+        return false
+    end
+end
+
+local function throwKnife(targetPosition)
+    if not player.Character or not player.Character:FindFirstChild("Knife") then
+        return false
+    end
+    
+    -- Use the updated knife throw function
+    local success = invokeKnifeThrow(targetPosition)
+    
+    if success then
+        createNotification("Throw", "Knife thrown successfully!", 1, "success")
+        debugLog("Knife thrown")
+        return true
+    else
+        createNotification("Throw", "Failed to throw knife", 1, "error")
+        debugLog("Failed to throw knife")
+        return false
+    end
+end
+
+local function stabPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character or not player.Character or not player.Character:FindFirstChild("Knife") then
+        return false
+    end
+    
+    -- Use the updated knife stab function
+    local success = invokeKnifeStab()
+    
+    if success then
+        createNotification("Stab", "Stab executed successfully!", 1, "warning")
+        debugLog("Stabbed " .. targetPlayer.Name)
+        return true
+    else
+        createNotification("Stab", "Failed to stab", 1, "error")
+        debugLog("Failed to stab")
+        return false
+    end
+end
+
+-- Auto Features with Updated Functions
+local function toggleAutoShoot(enabled)
+    gameState.autoShootEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.autoShoot then
+            gameState.connections.autoShoot:Disconnect()
+        end
+        
+        gameState.connections.autoShoot = RunService.Heartbeat:Connect(function()
+            if not gameState.autoShootEnabled or getPlayerRole(player) ~= "Sheriff" then
+                return
+            end
+            
+            updateGameData()
+            
+            local target = gameState.aimTarget or gameState.murderer
+            if target then
+                shootGun(target)
+                wait(gameState.shootDelay)
+            end
+        end)
+        
+        createNotification("Auto Shoot", "Auto shoot enabled with " .. gameState.currentAimModel, 2, "success")
+        debugLog("Auto shoot enabled")
+    else
+        if gameState.connections.autoShoot then
+            gameState.connections.autoShoot:Disconnect()
+            gameState.connections.autoShoot = nil
+        end
+        
+        createNotification("Auto Shoot", "Auto shoot disabled", 2, "info")
+        debugLog("Auto shoot disabled")
+    end
+end
+
+local function toggleAutoThrow(enabled)
+    gameState.autoThrowEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.autoThrow then
+            gameState.connections.autoThrow:Disconnect()
+        end
+        
+        gameState.connections.autoThrow = RunService.Heartbeat:Connect(function()
+            if not gameState.autoThrowEnabled or getPlayerRole(player) ~= "Murderer" then
+                return
+            end
+            
+            updateGameData()
+            
+            local target = gameState.aimTarget or gameState.sheriff or gameState.innocents[1]
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                local targetPos = target.Character.Head.Position
+                
+                if gameState.currentKnifeModel == "QEX-MAX3" then
+                    -- Advanced knife prediction
+                    if target.Character:FindFirstChild("HumanoidRootPart") then
+                        local velocity = target.Character.HumanoidRootPart.Velocity
+                        targetPos = targetPos + (velocity * 0.3) -- More prediction for knife
+                    end
+                elseif gameState.currentKnifeModel == "QEX-MAX2" then
+                    -- Medium knife prediction
+                    if target.Character:FindFirstChild("HumanoidRootPart") then
+                        local velocity = target.Character.HumanoidRootPart.Velocity
+                        targetPos = targetPos + (velocity * 0.15)
+                    end
+                end
+                
+                throwKnife(targetPos)
+                wait(gameState.throwDelay)
+            end
+        end)
+        
+        createNotification("Auto Throw", "Auto throw enabled with " .. gameState.currentKnifeModel, 2, "success")
+        debugLog("Auto throw enabled")
+    else
+        if gameState.connections.autoThrow then
+            gameState.connections.autoThrow:Disconnect()
+            gameState.connections.autoThrow = nil
+        end
+        
+        createNotification("Auto Throw", "Auto throw disabled", 2, "info")
+        debugLog("Auto throw disabled")
+    end
+end
+
+local function toggleKillAura(enabled)
+    gameState.killAuraEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.killAura then
+            gameState.connections.killAura:Disconnect()
+        end
+        
+        gameState.connections.killAura = RunService.Heartbeat:Connect(function()
+            if not gameState.killAuraEnabled or getPlayerRole(player) ~= "Murderer" or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+                return
+            end
+            
+            for _, targetPlayer in ipairs(Players:GetPlayers()) do
+                if targetPlayer ~= player and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") and targetPlayer.Character:FindFirstChild("Humanoid") and targetPlayer.Character.Humanoid.Health > 0 then
+                    local distance = getDistance(player.Character.HumanoidRootPart.Position, targetPlayer.Character.HumanoidRootPart.Position)
+                    
+                    if distance <= gameState.killAuraRange then
+                        stabPlayer(targetPlayer)
+                        wait(0.1)
+                        break
+                    end
+                end
+            end
+        end)
+        
+        createNotification("Kill Aura", "Kill aura enabled (Range: " .. gameState.killAuraRange .. ")", 2, "warning")
+        debugLog("Kill aura enabled")
+    else
+        if gameState.connections.killAura then
+            gameState.connections.killAura:Disconnect()
+            gameState.connections.killAura = nil
+        end
+        
+        createNotification("Kill Aura", "Kill aura disabled", 2, "info")
+        debugLog("Kill aura disabled")
+    end
+end
+
+local function toggleAimbot(enabled)
+    gameState.aimbotEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.aimbot then
+            gameState.connections.aimbot:Disconnect()
+        end
+        
+        gameState.connections.aimbot = RunService.RenderStepped:Connect(function()
+            if not gameState.aimbotEnabled then return end
+            
+            local target = getClosestPlayerToMouse()
+            if target then
+                aimAtPlayer(target)
+            end
+        end)
+        
+        createNotification("Aimbot", "Aimbot enabled" .. (gameState.silentAimEnabled and " (Silent)" or ""), 2, "success")
+        debugLog("Aimbot enabled")
+    else
+        if gameState.connections.aimbot then
+            gameState.connections.aimbot:Disconnect()
+            gameState.connections.aimbot = nil
+        end
+        
+        gameState.aimTarget = nil
+        createNotification("Aimbot", "Aimbot disabled", 2, "info")
+        debugLog("Aimbot disabled")
+    end
+end
+
+-- ESP System
+local function createPlayerESP(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character or not gameState.espEnabled then return end
+    
+    local character = targetPlayer.Character
+    local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+    local humanoid = character:FindFirstChild("Humanoid")
+    
+    if not humanoidRootPart or not humanoid then return end
+    
+    local role = getPlayerRole(targetPlayer)
+    local roleColor = getRoleColor(role)
+    
+    -- Highlight/Chams
+    if gameState.showChams then
+        if not gameState.highlights[targetPlayer] then
+            local highlight = Instance.new("Highlight")
+            highlight.Name = "QEXHighlight"
+            highlight.FillColor = roleColor
+            highlight.OutlineColor = roleColor
+            highlight.FillTransparency = 0.5
+            highlight.OutlineTransparency = 0
+            highlight.Adornee = character
+            highlight.Parent = character
+            gameState.highlights[targetPlayer] = highlight
+        else
+            gameState.highlights[targetPlayer].FillColor = roleColor
+            gameState.highlights[targetPlayer].OutlineColor = roleColor
+        end
+    end
+    
+    -- Info Labels
+    if gameState.showRoles or gameState.showDistance or gameState.showHealth then
+        if not gameState.labels[targetPlayer] then
+            local billboardGui = Instance.new("BillboardGui")
+            billboardGui.Name = "QEXInfoESP"
+            billboardGui.AlwaysOnTop = true
+            billboardGui.Size = UDim2.new(0, 200, 0, 50)
+            billboardGui.StudsOffset = Vector3.new(0, 3, 0)
+            billboardGui.Adornee = humanoidRootPart
+            
+            local infoLabel = Instance.new("TextLabel")
+            infoLabel.Size = UDim2.new(1, 0, 1, 0)
+            infoLabel.BackgroundTransparency = 1
+            infoLabel.TextColor3 = roleColor
+            infoLabel.TextStrokeTransparency = 0.5
+            infoLabel.TextStrokeColor3 = Color3.new(0, 0, 0)
+            infoLabel.TextSize = getFontSize("Text")
+            infoLabel.Font = Enum.Font.GothamBold
+            infoLabel.TextXAlignment = Enum.TextXAlignment.Left
+            infoLabel.Parent = billboardGui
+            
+            billboardGui.Parent = character
+            gameState.labels[targetPlayer] = billboardGui
+        end
+        
+        -- Update label text
+        local infoLabel = gameState.labels[targetPlayer]:FindFirstChildOfClass("TextLabel")
+        if infoLabel then
+            local infoText = targetPlayer.Name
+            
+            if gameState.showRoles then
+                infoText = infoText .. " [" .. role .. "]"
+            end
+            
+            if gameState.showHealth then
+                infoText = infoText .. " [" .. math.floor(humanoid.Health) .. "HP]"
+            end
+            
+            if gameState.showDistance and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                local distance = getDistance(player.Character.HumanoidRootPart.Position, humanoidRootPart.Position)
+                infoText = infoText .. " [" .. math.floor(distance) .. "m]"
+            end
+            
+            infoLabel.Text = infoText
+            infoLabel.TextColor3 = roleColor
+        end
+    end
+end
+
+local function updateESP()
+    if not gameState.espEnabled then return end
+    
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player then
+            createPlayerESP(p)
+        end
+    end
+end
+
+local function toggleESP(enabled)
+    gameState.espEnabled = enabled
+    
+    if not enabled then
+        -- Clean up all ESP elements
+        for _, highlight in pairs(gameState.highlights) do
+            if highlight and highlight.Parent then
+                highlight:Destroy()
+            end
+        end
+        
+        for _, label in pairs(gameState.labels) do
+            if label and label.Parent then
+                label:Destroy()
+            end
+        end
+        
+        gameState.highlights = {}
+        gameState.labels = {}
+        debugLog("ESP disabled")
+    else
+        debugLog("ESP enabled")
+    end
+end
+
+-- Movement Functions
+local function toggleNoclip(enabled)
+    gameState.noclipEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.noclip then
+            gameState.connections.noclip:Disconnect()
+        end
+        
+        gameState.connections.noclip = RunService.Stepped:Connect(function()
+            if player.Character then
+                for _, part in pairs(player.Character:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        part.CanCollide = false
+                    end
+                end
+            end
+        end)
+        
+        createNotification("Noclip", "Noclip enabled", 2, "success")
+        debugLog("Noclip enabled")
+    else
+        if gameState.connections.noclip then
+            gameState.connections.noclip:Disconnect()
+            gameState.connections.noclip = nil
+        end
+        
+        if player.Character then
+            for _, part in pairs(player.Character:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                    part.CanCollide = true
+                end
+            end
+        end
+        
+        createNotification("Noclip", "Noclip disabled", 2, "info")
+        debugLog("Noclip disabled")
+    end
+end
+
+local function toggleSpeed(enabled)
+    gameState.speedEnabled = enabled
+    
+    if enabled then
+        if player.Character and player.Character:FindFirstChild("Humanoid") then
+            player.Character.Humanoid.WalkSpeed = gameState.walkSpeed
+        end
+        createNotification("Speed", "Speed boost enabled (" .. gameState.walkSpeed .. ")", 2, "success")
+        debugLog("Speed enabled")
+    else
+        if player.Character and player.Character:FindFirstChild("Humanoid") then
+            player.Character.Humanoid.WalkSpeed = 16
+        end
+        createNotification("Speed", "Speed boost disabled", 2, "info")
+        debugLog("Speed disabled")
+    end
+end
+
+-- Teleport Functions
+local function teleportToPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("HumanoidRootPart") or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    
+    player.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+    createNotification("Teleport", "Teleported to " .. targetPlayer.Name, 2, "success")
+    debugLog("Teleported to " .. targetPlayer.Name)
+end
+
+local function teleportToGun()
+    updateGameData()
+    
+    if not gameState.gunDrop or not gameState.gunDrop:FindFirstChild("Handle") or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        createNotification("Teleport", "No gun found", 2, "error")
+        debugLog("Teleport failed: No gun found")
+        return
+    end
+    
+    player.Character.HumanoidRootPart.CFrame = CFrame.new(gameState.gunDrop.Handle.Position + Vector3.new(0, 3, 0))
+    createNotification("Teleport", "Teleported to gun", 2, "success")
+    debugLog("Teleported to gun")
+end
+
+-- Manual Controls Setup with Updated Functions
+local function setupManualControls()
+    -- Manual shoot (Left Click)
+    mouse.Button1Down:Connect(function()
+        if gameState.manualShootEnabled and getPlayerRole(player) == "Sheriff" then
+            local target = gameState.aimTarget or getClosestPlayerToMouse()
+            if target then
+                shootGun(target)
+            end
+        end
+    end)
+    
+    -- Manual throw (Right Click)
+    mouse.Button2Down:Connect(function()
+        if gameState.manualThrowEnabled and getPlayerRole(player) == "Murderer" then
+            local target = gameState.aimTarget or getClosestPlayerToMouse()
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                throwKnife(target.Character.Head.Position)
+            end
+        end
+    end)
+    
+    -- Keybinds
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == Enum.KeyCode.E then
+            -- Manual stab
+            if getPlayerRole(player) == "Murderer" then
+                for _, targetPlayer in ipairs(Players:GetPlayers()) do
+                    if targetPlayer ~= player and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                        local distance = getDistance(player.Character.HumanoidRootPart.Position, targetPlayer.Character.HumanoidRootPart.Position)
+                        if distance <= 10 then
+                            stabPlayer(targetPlayer)
+                            break
+                        end
+                    end
+                end
+            end
+        elseif input.KeyCode == Enum.KeyCode.Q then
+            -- Quick shoot
+            if getPlayerRole(player) == "Sheriff" then
+                local target = gameState.aimTarget or getClosestPlayerToMouse()
+                if target then
+                    shootGun(target)
+                end
+            end
+        elseif input.KeyCode == Enum.KeyCode.R then
+            -- Quick throw
+            if getPlayerRole(player) == "Murderer" then
+                local target = gameState.aimTarget or getClosestPlayerToMouse()
+                if target and target.Character and target.Character:FindFirstChild("Head") then
+                    throwKnife(target.Character.Head.Position)
+                end
+            end
+        end
+    end)
+end
+
+-- UI Creation Functions
+local function createToggle(parent, text, defaultValue, callback)
+    local toggleFrame = Instance.new("Frame")
+    toggleFrame.Size = UDim2.new(1, 0, 0, 40)
+    toggleFrame.BackgroundTransparency = 1
+    toggleFrame.Parent = parent
+    
+    local toggleLabel = Instance.new("TextLabel")
+    toggleLabel.Size = UDim2.new(0.7, 0, 1, 0)
+    toggleLabel.BackgroundTransparency = 1
+    toggleLabel.Text = text
+    toggleLabel.TextColor3 = CONFIG.Colors.Text
+    toggleLabel.TextSize = getFontSize("Text")
+    toggleLabel.Font = Enum.Font.Gotham
+    toggleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    toggleLabel.Parent = toggleFrame
+    
+    local toggleButton = Instance.new("Frame")
+    toggleButton.Size = UDim2.new(0, 50, 0, 25)
+    toggleButton.Position = UDim2.new(1, -55, 0.5, -12.5)
+    toggleButton.BackgroundColor3 = defaultValue and CONFIG.Colors.Success or CONFIG.Colors.TextSecondary
+    toggleButton.BorderSizePixel = 0
+    toggleButton.Parent = toggleFrame
+    
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(0, 12.5)
+    toggleCorner.Parent = toggleButton
+    
+    local toggleDot = Instance.new("Frame")
+    toggleDot.Size = UDim2.new(0, 21, 0, 21)
+    toggleDot.Position = defaultValue and UDim2.new(1, -23, 0.5, -10.5) or UDim2.new(0, 2, 0.5, -10.5)
+    toggleDot.BackgroundColor3 = CONFIG.Colors.Text
+    toggleDot.BorderSizePixel = 0
+    toggleDot.Parent = toggleButton
+    
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(0, 10.5)
+    dotCorner.Parent = toggleDot
+    
+    local isEnabled = defaultValue
+    
+    local function updateToggle()
+        TweenService:Create(toggleDot, TweenInfo.new(0.2), {
+            Position = isEnabled and UDim2.new(1, -23, 0.5, -10.5) or UDim2.new(0, 2, 0.5, -10.5)
+        }):Play()
+        
+        TweenService:Create(toggleButton, TweenInfo.new(0.2), {
+            BackgroundColor3 = isEnabled and CONFIG.Colors.Success or CONFIG.Colors.TextSecondary
+        }):Play()
+        
+        callback(isEnabled)
+    end
+    
+    toggleButton.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            isEnabled = not isEnabled
+            updateToggle()
+        end
+    end)
+    
+    return toggleFrame
+end
+
+local function createSlider(parent, text, min, max, defaultValue, callback)
+    local sliderFrame = Instance.new("Frame")
+    sliderFrame.Size = UDim2.new(1, 0, 0, 60)
+    sliderFrame.BackgroundTransparency = 1
+    sliderFrame.Parent = parent
+    
+    local sliderLabel = Instance.new("TextLabel")
+    sliderLabel.Size = UDim2.new(1, 0, 0, 20)
+    sliderLabel.BackgroundTransparency = 1
+    sliderLabel.Text = text .. ": " .. defaultValue
+    sliderLabel.TextColor3 = CONFIG.Colors.Text
+    sliderLabel.TextSize = getFontSize("Text")
+    sliderLabel.Font = Enum.Font.Gotham
+    sliderLabel.TextXAlignment = Enum.TextXAlignment.Left
+    sliderLabel.Parent = sliderFrame
+    
+    local sliderBackground = Instance.new("Frame")
+    sliderBackground.Size = UDim2.new(1, 0, 0, 10)
+    sliderBackground.Position = UDim2.new(0, 0, 0.5, 0)
+    sliderBackground.BackgroundColor3 = CONFIG.Colors.Secondary
+    sliderBackground.BorderSizePixel = 0
+    sliderBackground.Parent = sliderFrame
+    
+    local sliderCorner = Instance.new("UICorner")
+    sliderCorner.CornerRadius = UDim.new(0, 5)
+    sliderCorner.Parent = sliderBackground
+    
+    local sliderFill = Instance.new("Frame")
+    sliderFill.Size = UDim2.new((defaultValue - min) / (max - min), 0, 1, 0)
+    sliderFill.BackgroundColor3 = CONFIG.Colors.Accent
+    sliderFill.BorderSizePixel = 0
+    sliderFill.Parent = sliderBackground
+    
+    local fillCorner = Instance.new("UICorner")
+    fillCorner.CornerRadius = UDim.new(0, 5)
+    fillCorner.Parent = sliderFill
+    
+    local sliderDot = Instance.new("Frame")
+    sliderDot.Size = UDim2.new(0, 20, 0, 20)
+    sliderDot.Position = UDim2.new((defaultValue - min) / (max - min), -10, 0.5, -10)
+    sliderDot.BackgroundColor3 = CONFIG.Colors.Text
+    sliderDot.BorderSizePixel = 0
+    sliderDot.ZIndex = 2
+    sliderDot.Parent = sliderBackground
+    
+    local dotCorner = Instance.new("UICorner")
+    dotCorner.CornerRadius = UDim.new(1, 0)
+    dotCorner.Parent = sliderDot
+    
+    local currentValue = defaultValue
+    
+    local function updateSlider(input)
+        local pos = input.Position.X
+        local relativePos = math.clamp((pos - sliderBackground.AbsolutePosition.X) / sliderBackground.AbsoluteSize.X, 0, 1)
+        local value = min + (max - min) * relativePos
+        
+        -- Round to 2 decimal places
+        value = math.floor(value * 100) / 100
+        
+        if value ~= currentValue then
+            currentValue = value
+            sliderLabel.Text = text .. ": " .. currentValue
+            sliderFill.Size = UDim2.new(relativePos, 0, 1, 0)
+            sliderDot.Position = UDim2.new(relativePos, -10, 0.5, -10)
+            callback(currentValue)
+        end
+    end
+    
+    sliderBackground.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            updateSlider(input)
+            local dragging = true
+            
+            local connection
+            connection = UserInputService.InputChanged:Connect(function(input)
+                if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                    updateSlider(input)
+                end
+            end)
+            
+            UserInputService.InputEnded:Connect(function(input)
+                if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                    dragging = false
+                    if connection then
+                        connection:Disconnect()
+                    end
+                end
+            end)
+        end
+    end)
+    
+    return sliderFrame
+end
+
+local function createButton(parent, text, callback)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 0, 35)
+    button.BackgroundColor3 = CONFIG.Colors.Accent
+    button.BorderSizePixel = 0
+    button.Text = text
+    button.TextColor3 = CONFIG.Colors.Text
+    button.TextSize = getFontSize("Button")
+    button.Font = Enum.Font.GothamSemibold
+    button.Parent = parent
+    
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 8)
+    buttonCorner.Parent = button
+    
+    button.MouseEnter:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {
+            BackgroundColor3 = CONFIG.Colors.AccentHover
+        }):Play()
+    end)
+    
+    button.MouseLeave:Connect(function()
+        TweenService:Create(button, TweenInfo.new(0.2), {
+            BackgroundColor3 = CONFIG.Colors.Accent
+        }):Play()
+    end)
+    
+    button.MouseButton1Click:Connect(callback)
+    button.TouchTap:Connect(callback)
+    
+    return button
+end
+
+local function createDropdown(parent, text, options, default, callback)
+    local dropdownFrame = Instance.new("Frame")
+    dropdownFrame.Size = UDim2.new(1, 0, 0, 40)
+    dropdownFrame.BackgroundTransparency = 1
+    dropdownFrame.Parent = parent
+    
+    local dropdownLabel = Instance.new("TextLabel")
+    dropdownLabel.Size = UDim2.new(0.5, 0, 1, 0)
+    dropdownLabel.BackgroundTransparency = 1
+    dropdownLabel.Text = text
+    dropdownLabel.TextColor3 = CONFIG.Colors.Text
+    dropdownLabel.TextSize = getFontSize("Text")
+    dropdownLabel.Font = Enum.Font.Gotham
+    dropdownLabel.TextXAlignment = Enum.TextXAlignment.Left
+    dropdownLabel.Parent = dropdownFrame
+    
+    local dropdownButton = Instance.new("TextButton")
+    dropdownButton.Size = UDim2.new(0.5, -10, 0, 30)
+    dropdownButton.Position = UDim2.new(0.5, 5, 0, 5)
+    dropdownButton.BackgroundColor3 = CONFIG.Colors.Secondary
+    dropdownButton.BorderSizePixel = 0
+    dropdownButton.Text = default
+    dropdownButton.TextColor3 = CONFIG.Colors.Text
+    dropdownButton.TextSize = getFontSize("Text")
+    dropdownButton.Font = Enum.Font.Gotham
+    dropdownButton.Parent = dropdownFrame
+    
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(0, 6)
+    buttonCorner.Parent = dropdownButton
+    
+    local currentOption = default
+    local optionIndex = 1
+    
+    for i, option in ipairs(options) do
+        if option == default then
+            optionIndex = i
+            break
+        end
+    end
+    
+    dropdownButton.MouseButton1Click:Connect(function()
+        optionIndex = optionIndex + 1
+        if optionIndex > #options then
+            optionIndex = 1
+        end
+        
+        currentOption = options[optionIndex]
+        dropdownButton.Text = currentOption
+        callback(currentOption)
+    end)
+    
+    return dropdownFrame
+end
+
+local function createCard(parent, title)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 0, 0)
+    card.AutomaticSize = Enum.AutomaticSize.Y
+    card.BackgroundColor3 = CONFIG.Colors.Secondary
+    card.BorderSizePixel = 0
+    card.Parent = parent
+    
+    local cardCorner = Instance.new("UICorner")
+    cardCorner.CornerRadius = UDim.new(0, 12)
+    cardCorner.Parent = card
+    
+    local cardStroke = Instance.new("UIStroke")
+    cardStroke.Color = CONFIG.Colors.Tertiary
+    cardStroke.Thickness = 1
+    cardStroke.Parent = card
+    
+    local cardHeader = Instance.new("Frame")
+    cardHeader.Size = UDim2.new(1, 0, 0, 40)
+    cardHeader.BackgroundTransparency = 1
+    cardHeader.Parent = card
+    
+    local cardTitle = Instance.new("TextLabel")
+    cardTitle.Size = UDim2.new(1, -20, 1, 0)
+    cardTitle.Position = UDim2.new(0, 15, 0, 0)
+    cardTitle.BackgroundTransparency = 1
+    cardTitle.Text = title
+    cardTitle.TextColor3 = CONFIG.Colors.Accent
+    cardTitle.TextSize = getFontSize("Subtitle")
+    cardTitle.Font = Enum.Font.GothamBold
+    cardTitle.TextXAlignment = Enum.TextXAlignment.Left
+    cardTitle.Parent = cardHeader
+    
+    local cardContent = Instance.new("Frame")
+    cardContent.Size = UDim2.new(1, -20, 0, 0)
+    cardContent.Position = UDim2.new(0, 10, 0, 40)
+    cardContent.AutomaticSize = Enum.AutomaticSize.Y
+    cardContent.BackgroundTransparency = 1
+    cardContent.Parent = card
+    
+    local contentLayout = Instance.new("UIListLayout")
+    contentLayout.Padding = UDim.new(0, 10)
+    contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    contentLayout.Parent = cardContent
+    
+    local contentPadding = Instance.new("UIPadding")
+    contentPadding.PaddingBottom = UDim.new(0, 15)
+    contentPadding.Parent = cardContent
+    
+    return cardContent
+end
+
+-- Create Mobile Control Panel with Updated Functions
+local function createMobileControls(screenGui)
+    if deviceType ~= "Mobile" then return end
+    
+    local controlPanel = Instance.new("Frame")
+    controlPanel.Name = "MobileControls"
+    controlPanel.Size = UDim2.new(0, 200, 0, 300)
+    controlPanel.Position = UDim2.new(0, 10, 1, -310)
+    controlPanel.BackgroundColor3 = CONFIG.Colors.Primary
+    controlPanel.BorderSizePixel = 0
+    controlPanel.Parent = screenGui
+    
+    local controlCorner = Instance.new("UICorner")
+    controlCorner.CornerRadius = UDim.new(0, 12)
+    controlCorner.Parent = controlPanel
+    
+    local controlStroke = Instance.new("UIStroke")
+    controlStroke.Color = CONFIG.Colors.Accent
+    controlStroke.Thickness = 2
+    controlStroke.Transparency = 0.7
+    controlStroke.Parent = controlPanel
+    
+    local controlLayout = Instance.new("UIListLayout")
+    controlLayout.Padding = UDim.new(0, 5)
+    controlLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    controlLayout.Parent = controlPanel
+    
+    local controlPadding = Instance.new("UIPadding")
+    controlPadding.PaddingTop = UDim.new(0, 10)
+    controlPadding.PaddingBottom = UDim.new(0, 10)
+    controlPadding.PaddingLeft = UDim.new(0, 10)
+    controlPadding.PaddingRight = UDim.new(0, 10)
+    controlPadding.Parent = controlPanel
+    
+    -- Control Title
+    local controlTitle = Instance.new("TextLabel")
+    controlTitle.Size = UDim2.new(1, 0, 0, 25)
+    controlTitle.BackgroundTransparency = 1
+    controlTitle.Text = "Mobile Controls v" .. CONFIG.Version
+    controlTitle.TextColor3 = CONFIG.Colors.Accent
+    controlTitle.TextSize = getFontSize("Subtitle")
+    controlTitle.Font = Enum.Font.GothamBold
+    controlTitle.LayoutOrder = 1
+    controlTitle.Parent = controlPanel
+    
+    -- Quick Shoot Button
+    local shootButton = Instance.new("TextButton")
+    shootButton.Size = UDim2.new(1, 0, 0, 40)
+    shootButton.BackgroundColor3 = CONFIG.Colors.Sheriff
+    shootButton.BorderSizePixel = 0
+    shootButton.Text = "QUICK SHOOT"
+    shootButton.TextColor3 = CONFIG.Colors.Text
+    shootButton.TextSize = getFontSize("Button")
+    shootButton.Font = Enum.Font.GothamBold
+    shootButton.LayoutOrder = 2
+    shootButton.Parent = controlPanel
+    
+    local shootCorner = Instance.new("UICorner")
+    shootCorner.CornerRadius = UDim.new(0, 8)
+    shootCorner.Parent = shootButton
+    
+    shootButton.MouseButton1Click:Connect(function()
+        if getPlayerRole(player) == "Sheriff" then
+            local target = gameState.aimTarget or getClosestPlayerToMouse()
+            if target then
+                shootGun(target)
+            end
+        else
+            createNotification("Error", "You need to be Sheriff", 2, "error")
+        end
+    end)
+    
+    -- Quick Throw Button
+    local throwButton = Instance.new("TextButton")
+    throwButton.Size = UDim2.new(1, 0, 0, 40)
+    throwButton.BackgroundColor3 = CONFIG.Colors.Murderer
+    throwButton.BorderSizePixel = 0
+    throwButton.Text = "QUICK THROW"
+    throwButton.TextColor3 = CONFIG.Colors.Text
+    throwButton.TextSize = getFontSize("Button")
+    throwButton.Font = Enum.Font.GothamBold
+    throwButton.LayoutOrder = 3
+    throwButton.Parent = controlPanel
+    
+    local throwCorner = Instance.new("UICorner")
+    throwCorner.CornerRadius = UDim.new(0, 8)
+    throwCorner.Parent = throwButton
+    
+    throwButton.MouseButton1Click:Connect(function()
+        if getPlayerRole(player) == "Murderer" then
+            local target = gameState.aimTarget or getClosestPlayerToMouse()
+            if target and target.Character and target.Character:FindFirstChild("Head") then
+                throwKnife(target.Character.Head.Position)
+            end
+        else
+            createNotification("Error", "You need to be Murderer", 2, "error")
+        end
+    end)
+    
+    -- Stab Button
+    local stabButton = Instance.new("TextButton")
+    stabButton.Size = UDim2.new(1, 0, 0, 40)
+    stabButton.BackgroundColor3 = CONFIG.Colors.Danger
+    stabButton.BorderSizePixel = 0
+    stabButton.Text = "STAB NEARBY"
+    stabButton.TextColor3 = CONFIG.Colors.Text
+    stabButton.TextSize = getFontSize("Button")
+    stabButton.Font = Enum.Font.GothamBold
+    stabButton.LayoutOrder = 4
+    stabButton.Parent = controlPanel
+    
+    local stabCorner = Instance.new("UICorner")
+    stabCorner.CornerRadius = UDim.new(0, 8)
+    stabCorner.Parent = stabButton
+    
+    stabButton.MouseButton1Click:Connect(function()
+        if getPlayerRole(player) == "Murderer" then
+            for _, targetPlayer in ipairs(Players:GetPlayers()) do
+                if targetPlayer ~= player and targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                    local distance = getDistance(player.Character.HumanoidRootPart.Position, targetPlayer.Character.HumanoidRootPart.Position)
+                    if distance <= 10 then
+                        stabPlayer(targetPlayer)
+                        break
+                    end
+                end
+            end
+        else
+            createNotification("Error", "You need to be Murderer", 2, "error")
+        end
+    end)
+    
+    -- Teleport to Gun Button
+    local gunButton = Instance.new("TextButton")
+    gunButton.Size = UDim2.new(1, 0, 0, 40)
+    gunButton.BackgroundColor3 = CONFIG.Colors.Warning
+    gunButton.BorderSizePixel = 0
+    gunButton.Text = "TP TO GUN"
+    gunButton.TextColor3 = CONFIG.Colors.Text
+    gunButton.TextSize = getFontSize("Button")
+    gunButton.Font = Enum.Font.GothamBold
+    gunButton.LayoutOrder = 5
+    gunButton.Parent = controlPanel
+    
+    local gunCorner = Instance.new("UICorner")
+    gunCorner.CornerRadius = UDim.new(0, 8)
+    gunCorner.Parent = gunButton
+    
+    gunButton.MouseButton1Click:Connect(function()
+        teleportToGun()
+    end)
+    
+    -- Toggle Controls Button
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Size = UDim2.new(1, 0, 0, 30)
+    toggleButton.BackgroundColor3 = CONFIG.Colors.Accent
+    toggleButton.BorderSizePixel = 0
+    toggleButton.Text = "HIDE CONTROLS"
+    toggleButton.TextColor3 = CONFIG.Colors.Text
+    toggleButton.TextSize = getFontSize("Text")
+    toggleButton.Font = Enum.Font.GothamBold
+    toggleButton.LayoutOrder = 6
+    toggleButton.Parent = controlPanel
+    
+    local toggleCorner = Instance.new("UICorner")
+    toggleCorner.CornerRadius = UDim.new(0, 6)
+    toggleCorner.Parent = toggleButton
+    
+    local controlsVisible = true
+    toggleButton.MouseButton1Click:Connect(function()
+        controlsVisible = not controlsVisible
+        
+        if controlsVisible then
+            controlPanel.Size = UDim2.new(0, 200, 0, 300)
+            toggleButton.Text = "HIDE CONTROLS"
+            shootButton.Visible = true
+            throwButton.Visible = true
+            stabButton.Visible = true
+            gunButton.Visible = true
+        else
+            controlPanel.Size = UDim2.new(0, 200, 0, 70)
+            toggleButton.Text = "SHOW CONTROLS"
+            shootButton.Visible = false
+            throwButton.Visible = false
+            stabButton.Visible = false
+            gunButton.Visible = false
+        end
+    end)
+    
+    return controlPanel
+end
+
+-- Create Floating UI Toggle Button for Mobile/Tablet
+local function createFloatingToggleButton()
+    if deviceType == "Desktop" then return end
+    
+    local floatingGui = Instance.new("ScreenGui")
+    floatingGui.Name = "QEXFloatingToggle"
+    floatingGui.Parent = playerGui
+    floatingGui.ResetOnSpawn = false
+    floatingGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    floatingGui.DisplayOrder = 1000
+    
+    local toggleButton = Instance.new("TextButton")
+    toggleButton.Size = UDim2.new(0, 60, 0, 60)
+    toggleButton.Position = UDim2.new(0, 20, 0, 20)
+    toggleButton.BackgroundColor3 = CONFIG.Colors.Accent
+    toggleButton.Text = "QEX"
+    toggleButton.TextColor3 = CONFIG.Colors.Text
+    toggleButton.TextSize = getFontSize("Button")
+    toggleButton.Font = Enum.Font.GothamBold
+    toggleButton.Parent = floatingGui
+    
+    local buttonCorner = Instance.new("UICorner")
+    buttonCorner.CornerRadius = UDim.new(1, 0)
+    buttonCorner.Parent = toggleButton
+    
+    toggleButton.MouseButton1Click:Connect(function()
+        local mainUI = playerGui:FindFirstChild("QEXUI")
+        if mainUI then
+            gameState.uiVisible = not gameState.uiVisible
+            mainUI.Enabled = gameState.uiVisible
+            
+            if gameState.uiVisible then
+                createNotification("QEX", "UI shown", 1, "info")
+            else
+                createNotification("QEX", "UI hidden", 1, "info")
+            end
+        end
+    end)
+    
+    return floatingGui
+end
+
+-- Create Main UI with Fixed Dragging
+local function createMainUI()
+    -- Main ScreenGui
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "QEXUI"
+    screenGui.Parent = playerGui
+    screenGui.ResetOnSpawn = false
+    screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    screenGui.DisplayOrder = 999
+    
+    -- Create Mobile Controls
+    createMobileControls(screenGui)
+    
+    -- Create floating toggle for mobile/tablet
+    createFloatingToggleButton()
+    
+    -- Main Container
+    local mainContainer = Instance.new("Frame")
+    mainContainer.Name = "MainContainer"
+    mainContainer.Size = getSize(
+        UDim2.new(0.95, 0, 0.9, 0),
+        UDim2.new(0.8, 0, 0.8, 0),
+        UDim2.new(0.7, 0, 0.75, 0)
+    )
+    mainContainer.Position = UDim2.new(0.5, 0, 0.5, 0)
+    mainContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+    mainContainer.BackgroundColor3 = CONFIG.Colors.Primary
+    mainContainer.BorderSizePixel = 0
+    mainContainer.ClipsDescendants = true
+    mainContainer.Parent = screenGui
+    
+    local containerCorner = Instance.new("UICorner")
+    containerCorner.CornerRadius = UDim.new(0, 16)
+    containerCorner.Parent = mainContainer
+    
+    local containerStroke = Instance.new("UIStroke")
+    containerStroke.Color = CONFIG.Colors.Accent
+    containerStroke.Thickness = 2
+    containerStroke.Transparency = 0.5
+    containerStroke.Parent = mainContainer
+    
+    -- Navigation Panel
+    local navPanel = Instance.new("Frame")
+    navPanel.Name = "NavigationPanel"
+    navPanel.Size = getSize(
+        UDim2.new(0, 80, 1, 0),
+        UDim2.new(0, 150, 1, 0),
+        UDim2.new(0, 200, 1, 0)
+    )
+    navPanel.BackgroundColor3 = CONFIG.Colors.Secondary
+    navPanel.BorderSizePixel = 0
+    navPanel.Parent = mainContainer
+    
+    local navCorner = Instance.new("UICorner")
+    navCorner.CornerRadius = UDim.new(0, 16)
+    navCorner.Parent = navPanel
+    
+    -- Profile Section with Photo
+    local profileFrame = Instance.new("Frame")
+    profileFrame.Size = UDim2.new(1, 0, 0, getSize(80, 100, 120))
+    profileFrame.BackgroundTransparency = 1
+    profileFrame.Parent = navPanel
+    
+    -- Profile Photo
+    local profilePhoto = Instance.new("ImageLabel")
+    profilePhoto.Size = getSize(
+        UDim2.new(0, 50, 0, 50),
+        UDim2.new(0, 60, 0, 60),
+        UDim2.new(0, 70, 0, 70)
+    )
+    profilePhoto.Position = UDim2.new(0.5, 0, 0, 10)
+    profilePhoto.AnchorPoint = Vector2.new(0.5, 0)
+    profilePhoto.BackgroundColor3 = CONFIG.Colors.Accent
+    profilePhoto.BorderSizePixel = 0
+    profilePhoto.Image = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. player.UserId .. "&width=420&height=420&format=png"
+    profilePhoto.Parent = profileFrame
+    
+    local photoCorner = Instance.new("UICorner")
+    photoCorner.CornerRadius = UDim.new(1, 0)
+    photoCorner.Parent = profilePhoto
+    
+    local photoStroke = Instance.new("UIStroke")
+    photoStroke.Color = CONFIG.Colors.Accent
+    photoStroke.Thickness = 2
+    photoStroke.Parent = profilePhoto
+    
+    -- Player Name (only show on tablet/desktop)
+    if deviceType ~= "Mobile" then
+        local playerName = Instance.new("TextLabel")
+        playerName.Size = UDim2.new(1, -10, 0, 20)
+        playerName.Position = UDim2.new(0, 5, 0, getSize(65, 75, 85))
+        playerName.BackgroundTransparency = 1
+        playerName.Text = player.DisplayName
+        playerName.TextColor3 = CONFIG.Colors.Text
+        playerName.TextSize = getFontSize("Text")
+        playerName.Font = Enum.Font.GothamBold
+        playerName.TextScaled = true
+        playerName.Parent = profileFrame
+        
+        local playerRole = Instance.new("TextLabel")
+        playerRole.Size = UDim2.new(1, -10, 0, 15)
+        playerRole.Position = UDim2.new(0, 5, 0, getSize(85, 95, 105))
+        playerRole.BackgroundTransparency = 1
+        playerRole.Text = "Loading..."
+        playerRole.TextColor3 = CONFIG.Colors.TextSecondary
+        playerRole.TextSize = getFontSize("Text") - 2
+        playerRole.Font = Enum.Font.Gotham
+        playerRole.TextScaled = true
+        playerRole.Parent = profileFrame
+        
+        -- Update role continuously
+        spawn(function()
+            while playerRole and playerRole.Parent do
+                local role = getPlayerRole(player)
+                playerRole.Text = role
+                playerRole.TextColor3 = getRoleColor(role)
+                wait(1)
+            end
+        end)
+    end
+    
+    -- Navigation Buttons
+    local navButtonsFrame = Instance.new("ScrollingFrame")
+    navButtonsFrame.Size = UDim2.new(1, 0, 1, -getSize(80, 100, 120))
+    navButtonsFrame.Position = UDim2.new(0, 0, 0, getSize(80, 100, 120))
+    navButtonsFrame.BackgroundTransparency = 1
+    navButtonsFrame.BorderSizePixel = 0
+    navButtonsFrame.ScrollBarThickness = 4
+    navButtonsFrame.ScrollBarImageColor3 = CONFIG.Colors.Accent
+    navButtonsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    navButtonsFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    navButtonsFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+    navButtonsFrame.Parent = navPanel
+    
+    local navLayout = Instance.new("UIListLayout")
+    navLayout.Padding = UDim.new(0, 5)
+    navLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    navLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    navLayout.Parent = navButtonsFrame
+    
+    local navPadding = Instance.new("UIPadding")
+    navPadding.PaddingTop = UDim.new(0, 10)
+    navPadding.Parent = navButtonsFrame
+    
+    -- Tab Buttons
+    local tabButtons = {}
+    local tabs = {
+        {name = "Home", icon = "🏠", order = 1},
+        {name = "Aimbot", icon = "🎯", order = 2},
+        {name = "ESP", icon = "👁️", order = 3},
+        {name = "Auto", icon = "🤖", order = 4},
+        {name = "Player", icon = "👤", order = 5},
+        {name = "Chat", icon = "💬", order = 6},
+        {name = "Noob", icon = "👶", order = 7},
+        {name = "Settings", icon = "⚙️", order = 8}
+    }
+    
+    for _, tab in ipairs(tabs) do
+        local tabName = tab.name
+        local button = Instance.new("TextButton")
+        button.Size = getSize(
+            UDim2.new(0, 60, 0, 60),
+            UDim2.new(0, 120, 0, 40),
+            UDim2.new(0, 180, 0, 40)
+        )
+        button.BackgroundColor3 = tabName == gameState.currentTab and CONFIG.Colors.Accent or CONFIG.Colors.Primary
+        button.BorderSizePixel = 0
+        button.LayoutOrder = tab.order
+        
+        if deviceType == "Mobile" then
+            button.Text = tab.icon
+            button.TextSize = 24
+        else
+            button.Text = tab.icon .. " " .. tabName
+            button.TextSize = getFontSize("Button")
+        end
+        
+        button.TextColor3 = tabName == gameState.currentTab and CONFIG.Colors.Primary or CONFIG.Colors.Text
+        button.Font = Enum.Font.GothamBold
+        button.Parent = navButtonsFrame
+        
+        local buttonCorner = Instance.new("UICorner")
+        buttonCorner.CornerRadius = UDim.new(0, 8)
+        buttonCorner.Parent = button
+        
+        tabButtons[tabName] = button
+    end
+    
+    -- Content Panel
+    local contentPanel = Instance.new("Frame")
+    contentPanel.Name = "ContentPanel"
+    contentPanel.Size = UDim2.new(1, -getSize(90, 160, 210), 1, -20)
+    contentPanel.Position = UDim2.new(0, getSize(85, 155, 205), 0, 10)
+    contentPanel.BackgroundTransparency = 1
+    contentPanel.Parent = mainContainer
+    
+    local contentScroller = Instance.new("ScrollingFrame")
+    contentScroller.Name = "ContentScroller"
+    contentScroller.Size = UDim2.new(1, 0, 1, 0)
+    contentScroller.BackgroundTransparency = 1
+    contentScroller.BorderSizePixel = 0
+    contentScroller.ScrollBarThickness = 4
+    contentScroller.ScrollBarImageColor3 = CONFIG.Colors.Accent
+    contentScroller.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    contentScroller.CanvasSize = UDim2.new(0, 0, 0, 0)
+    contentScroller.ScrollingDirection = Enum.ScrollingDirection.Y
+    contentScroller.Parent = contentPanel
+    
+    local contentLayout = Instance.new("UIListLayout")
+    contentLayout.Padding = UDim.new(0, 15)
+    contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    contentLayout.Parent = contentScroller
+    
+    local contentPadding = Instance.new("UIPadding")
+    contentPadding.PaddingLeft = UDim.new(0, 10)
+    contentPadding.PaddingRight = UDim.new(0, 10)
+    contentPadding.PaddingTop = UDim.new(0, 10)
+    contentPadding.PaddingBottom = UDim.new(0, 10)
+    contentPadding.Parent = contentScroller
+    
+    -- Close Button
+    local closeButton = Instance.new("TextButton")
+    closeButton.Name = "CloseButton"
+    closeButton.Size = UDim2.new(0, 30, 0, 30)
+    closeButton.Position = UDim2.new(1, -40, 0, 10)
+    closeButton.BackgroundColor3 = CONFIG.Colors.Danger
+    closeButton.BorderSizePixel = 0
+    closeButton.Text = "×"
+    closeButton.TextColor3 = CONFIG.Colors.Text
+    closeButton.TextSize = getFontSize("Subtitle")
+    closeButton.Font = Enum.Font.GothamBold
+    closeButton.Parent = mainContainer
+    
+    local closeCorner = Instance.new("UICorner")
+    closeCorner.CornerRadius = UDim.new(0, 8)
+    closeCorner.Parent = closeButton
+    
+    closeButton.MouseButton1Click:Connect(function()
+        gameState.uiVisible = false
+        screenGui.Enabled = false
+        createNotification("QEX", "UI hidden - Press RightControl to show", 3, "info")
+    end)
+    
+    -- Tab Content Creation
+    local function updateTabContent()
+        -- Clear existing content
+        for _, child in pairs(contentScroller:GetChildren()) do
+            if child:IsA("Frame") and child.Name ~= "UIListLayout" and child.Name ~= "UIPadding" then
+                child:Destroy()
+            end
+        end
+        
+        if gameState.currentTab == "Home" then
+            -- Welcome Card
+            local welcomeCard = createCard(contentScroller, "Welcome to QEX v" .. CONFIG.Version)
+            
+            local welcomeText = Instance.new("TextLabel")
+            welcomeText.Size = UDim2.new(1, 0, 0, 100)
+            welcomeText.BackgroundTransparency = 1
+            welcomeText.Text = "✅ ALL FEATURES WORKING WITH UPDATED MM2 REMOTES!\n\nNew Features:\n• Fixed Fling System\n• Added Debug Mode\n• Fixed Gun Detection\n• Added Floating Toggle\n• Improved UI Reliability"
+            welcomeText.TextColor3 = CONFIG.Colors.Text
+            welcomeText.TextSize = getFontSize("Text")
+            welcomeText.Font = Enum.Font.Gotham
+            welcomeText.TextWrapped = true
+            welcomeText.TextYAlignment = Enum.TextYAlignment.Top
+            welcomeText.Parent = welcomeCard
+            
+            -- Quick Actions Card
+            local actionsCard = createCard(contentScroller, "Quick Actions")
+            
+            createButton(actionsCard, "Teleport to Gun", teleportToGun)
+            createButton(actionsCard, "Get Closest Player", function()
+                local closest = getClosestPlayerToMouse()
+                if closest then
+                    gameState.aimTarget = closest
+                    createNotification("Target", "Set target to " .. closest.DisplayName, 2, "info")
+                else
+                    createNotification("Target", "No players found", 2, "error")
+                end
+            end)
+            
+            -- Enhanced Home Content for Tablets
+            if deviceType == "Tablet" then
+                local statsCard = createCard(contentScroller, "Game Stats")
+                
+                local statsFrame = Instance.new("Frame")
+                statsFrame.Size = UDim2.new(1, 0, 0, 80)
+                statsFrame.BackgroundTransparency = 1
+                statsFrame.Parent = statsCard
+                
+                local function updateStats()
+                    local murderText = gameState.murderer and gameState.murderer.Name or "Unknown"
+                    local sheriffText = gameState.sheriff and gameState.sheriff.Name or "Unknown"
+                    
+                    statsFrame:ClearAllChildren()
+                    
+                    local murdererLabel = Instance.new("TextLabel")
+                    murdererLabel.Size = UDim2.new(0.5, -5, 0, 30)
+                    murdererLabel.Position = UDim2.new(0, 0, 0, 0)
+                    murdererLabel.BackgroundTransparency = 1
+                    murdererLabel.Text = "Murderer: " .. murderText
+                    murdererLabel.TextColor3 = CONFIG.Colors.Murderer
+                    murdererLabel.TextSize = getFontSize("Text")
+                    murdererLabel.Font = Enum.Font.GothamBold
+                    murdererLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    murdererLabel.Parent = statsFrame
+                    
+                    local sheriffLabel = Instance.new("TextLabel")
+                    sheriffLabel.Size = UDim2.new(0.5, -5, 0, 30)
+                    sheriffLabel.Position = UDim2.new(0.5, 5, 0, 0)
+                    sheriffLabel.BackgroundTransparency = 1
+                    sheriffLabel.Text = "Sheriff: " .. sheriffText
+                    sheriffLabel.TextColor3 = CONFIG.Colors.Sheriff
+                    sheriffLabel.TextSize = getFontSize("Text")
+                    sheriffLabel.Font = Enum.Font.GothamBold
+                    sheriffLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    sheriffLabel.Parent = statsFrame
+                    
+                    local playersLabel = Instance.new("TextLabel")
+                    playersLabel.Size = UDim2.new(1, 0, 0, 30)
+                    playersLabel.Position = UDim2.new(0, 0, 0, 40)
+                    playersLabel.BackgroundTransparency = 1
+                    playersLabel.Text = "Players: " .. #Players:GetPlayers()
+                    playersLabel.TextColor3 = CONFIG.Colors.Text
+                    playersLabel.TextSize = getFontSize("Text")
+                    playersLabel.Font = Enum.Font.GothamBold
+                    playersLabel.TextXAlignment = Enum.TextXAlignment.Left
+                    playersLabel.Parent = statsFrame
+                end
+                
+                updateStats()
+                gameState.connections.statsUpdater = RunService.Heartbeat:Connect(function()
+                    updateStats()
+                end)
+            end
+            
+        elseif gameState.currentTab == "Aimbot" then
+            -- Aimbot Settings Card
+            local aimbotCard = createCard(contentScroller, "Aimbot Settings")
+            
+            createToggle(aimbotCard, "Enable Aimbot", gameState.aimbotEnabled, toggleAimbot)
+            createToggle(aimbotCard, "Silent Aim", gameState.silentAimEnabled, function(enabled)
+                gameState.silentAimEnabled = enabled
+                createNotification("Silent Aim", enabled and "Enabled" or "Disabled", 2, "info")
+            end)
+            
+            createToggle(aimbotCard, "Predict Jump", gameState.predictJump, function(enabled)
+                gameState.predictJump = enabled
+            end)
+            
+            createToggle(aimbotCard, "Predict Air Shot", gameState.predictAirShot, function(enabled)
+                gameState.predictAirShot = enabled
+            end)
+            
+            createSlider(aimbotCard, "Aim FOV", 30, 180, gameState.aimFOV, function(value)
+                gameState.aimFOV = value
+            end)
+            
+            createSlider(aimbotCard, "Aim Smoothing", 1, 20, gameState.aimSmoothing, function(value)
+                gameState.aimSmoothing = value
+            end)
+            
+            createDropdown(aimbotCard, "Aim Model", {"QEX-X5", "QEX-X4", "QEX-X3"}, gameState.currentAimModel, function(model)
+                gameState.currentAimModel = model
+                createNotification("Aim Model", "Switched to " .. model, 2, "info")
+            end)
+            
+            -- Shooting Card
+            local shootCard = createCard(contentScroller, "Shooting Settings")
+            
+            createToggle(shootCard, "Auto Shoot", gameState.autoShootEnabled, toggleAutoShoot)
+            createToggle(shootCard, "Manual Shoot", gameState.manualShootEnabled, function(enabled)
+                gameState.manualShootEnabled = enabled
+                createNotification("Manual Shoot", enabled and "Enabled (Left Click)" or "Disabled", 2, "info")
+            end)
+            
+            createSlider(shootCard, "Shoot Delay", 0.05, 1, gameState.shootDelay, function(value)
+                gameState.shootDelay = value
+            end)
+            
+            -- Knife Card
+            local knifeCard = createCard(contentScroller, "Knife Settings")
+            
+            createToggle(knifeCard, "Auto Throw", gameState.autoThrowEnabled, toggleAutoThrow)
+            createToggle(knifeCard, "Manual Throw", gameState.manualThrowEnabled, function(enabled)
+                gameState.manualThrowEnabled = enabled
+                createNotification("Manual Throw", enabled and "Enabled (Right Click)" or "Disabled", 2, "info")
+            end)
+            createToggle(knifeCard, "Kill Aura", gameState.killAuraEnabled, toggleKillAura)
+            
+            createSlider(knifeCard, "Throw Delay", 0.1, 2, gameState.throwDelay, function(value)
+                gameState.throwDelay = value
+            end)
+            
+            createSlider(knifeCard, "Kill Aura Range", 5, 30, gameState.killAuraRange, function(value)
+                gameState.killAuraRange = value
+            end)
+            
+            createDropdown(knifeCard, "Knife Model", {"QEX-MAX3", "QEX-MAX2", "QEX-MAX1"}, gameState.currentKnifeModel, function(model)
+                gameState.currentKnifeModel = model
+                createNotification("Knife Model", "Switched to " .. model, 2, "info")
+            end)
+            
+        elseif gameState.currentTab == "ESP" then
+            -- ESP Settings Card
+            local espCard = createCard(contentScroller, "ESP Settings")
+            
+            createToggle(espCard, "Enable ESP", gameState.espEnabled, toggleESP)
+            createToggle(espCard, "Show Roles", gameState.showRoles, function(enabled)
+                gameState.showRoles = enabled
+            end)
+            createToggle(espCard, "Show Distance", gameState.showDistance, function(enabled)
+                gameState.showDistance = enabled
+            end)
+            createToggle(espCard, "Show Health", gameState.showHealth, function(enabled)
+                gameState.showHealth = enabled
+            end)
+            createToggle(espCard, "Show Chams", gameState.showChams, function(enabled)
+                gameState.showChams = enabled
+            end)
+            createToggle(espCard, "Gun Drop ESP", gameState.gunDropESP, function(enabled)
+                gameState.gunDropESP = enabled
+            end)
+            createToggle(espCard, "Coin ESP", gameState.coinESP, function(enabled)
+                gameState.coinESP = enabled
+            end)
+            
+        elseif gameState.currentTab == "Auto" then
+            -- Auto Features Card
+            local autoCard = createCard(contentScroller, "Auto Features")
+            
+            createToggle(autoCard, "Auto Coin Farm", gameState.coinFarmEnabled, function(enabled)
+                gameState.coinFarmEnabled = enabled
+                if enabled then
+                    coroutine.wrap(startCoinFarm)()
+                    coroutine.wrap(startCoinFarmNoclip)()
+                    createNotification("Coin Farm", "Enabled with speed " .. gameState.coinFarmSpeed, 3, "success")
+                else
+                    createNotification("Coin Farm", "Disabled", 2, "info")
+                end
+            end)
+            
+            createSlider(autoCard, "Coin Farm Speed", 1, 10, gameState.coinFarmSpeed, function(value)
+                gameState.coinFarmSpeed = value
+            end)
+            
+            createToggle(autoCard, "Auto Gun Farm", gameState.gunFarmEnabled, function(enabled)
+                gameState.gunFarmEnabled = enabled
+                createNotification("Auto Farm", enabled and "Gun farming enabled" or "Gun farming disabled", 2, "info")
+            end)
+            createToggle(autoCard, "Kill All (Murderer)", gameState.killAllEnabled, function(enabled)
+                gameState.killAllEnabled = enabled
+                createNotification("Kill All", enabled and "Kill all enabled" or "Kill all disabled", 2, "warning")
+            end)
+            
+        elseif gameState.currentTab == "Player" then
+            -- Movement Card
+            local movementCard = createCard(contentScroller, "Movement")
+            
+            createToggle(movementCard, "Noclip", gameState.noclipEnabled, toggleNoclip)
+            createToggle(movementCard, "Speed Boost", gameState.speedEnabled, toggleSpeed)
+            createToggle(movementCard, "Infinite Jump", gameState.infiniteJumpEnabled, function(enabled)
+                gameState.infiniteJumpEnabled = enabled
+                createNotification("Jump", enabled and "Infinite jump enabled" or "Infinite jump disabled", 2, "info")
+            end)
+            
+            createSlider(movementCard, "Walk Speed", 16, 200, gameState.walkSpeed, function(value)
+                gameState.walkSpeed = value
+                if gameState.speedEnabled and player.Character and player.Character:FindFirstChild("Humanoid") then
+                    player.Character.Humanoid.WalkSpeed = value
+                end
+            end)
+            
+            -- Fling Card
+            local flingCard = createCard(contentScroller, "Fling System")
+            
+            createToggle(flingCard, "Enable Fling", gameState.flingEnabled, toggleFling)
+            createSlider(flingCard, "Fling Power", 50, 500, 150, function(value)
+                flingVelocity = Vector3.new(math.random(-value, value), value, math.random(-value, value))
+            end)
+            
+            -- Player List Card with Profile Photos
+            local playersCard = createCard(contentScroller, "Players")
+            
+            local function updatePlayerList()
+                -- Clear existing player buttons
+                for _, child in pairs(playersCard:GetChildren()) do
+                    if child.Name:find("PlayerButton") then
+                        child:Destroy()
+                    end
+                end
+                
+                for _, p in ipairs(Players:GetPlayers()) do
+                    if p ~= player then
+                        local playerFrame = Instance.new("Frame")
+                        playerFrame.Name = p.Name .. "PlayerButton"
+                        playerFrame.Size = UDim2.new(1, 0, 0, getSize(70, 80, 90))
+                        playerFrame.BackgroundColor3 = CONFIG.Colors.Tertiary
+                        playerFrame.BorderSizePixel = 0
+                        playerFrame.Parent = playersCard
+                        
+                        local playerFrameCorner = Instance.new("UICorner")
+                        playerFrameCorner.CornerRadius = UDim.new(0, 8)
+                        playerFrameCorner.Parent = playerFrame
+                        
+                        -- Player Avatar/Photo
+                        local playerAvatar = Instance.new("ImageLabel")
+                        playerAvatar.Size = UDim2.new(0, getSize(50, 60, 70), 0, getSize(50, 60, 70))
+                        playerAvatar.Position = UDim2.new(0, 10, 0.5, getSize(-25, -30, -35))
+                        playerAvatar.BackgroundColor3 = CONFIG.Colors.Secondary
+                        playerAvatar.BorderSizePixel = 0
+                        playerAvatar.Image = "https://www.roblox.com/headshot-thumbnail/image?userId=" .. p.UserId .. "&width=420&height=420&format=png"
+                        playerAvatar.Parent = playerFrame
+                        
+                        local avatarCorner = Instance.new("UICorner")
+                        avatarCorner.CornerRadius = UDim.new(1, 0)
+                        avatarCorner.Parent = playerAvatar
+                        
+                        local avatarStroke = Instance.new("UIStroke")
+                        avatarStroke.Color = getRoleColor(getPlayerRole(p))
+                        avatarStroke.Thickness = 2
+                        avatarStroke.Parent = playerAvatar
+                        
+                        -- Player Name and Role
+                        local playerLabel = Instance.new("TextLabel")
+                        playerLabel.Size = UDim2.new(0.35, -80, 0.5, 0)
+                        playerLabel.Position = UDim2.new(0, getSize(70, 80, 90), 0, 5)
+                        playerLabel.BackgroundTransparency = 1
+                        playerLabel.Text = p.DisplayName
+                        playerLabel.TextColor3 = CONFIG.Colors.Text
+                        playerLabel.TextSize = getFontSize("Text")
+                        playerLabel.Font = Enum.Font.GothamBold
+                        playerLabel.TextXAlignment = Enum.TextXAlignment.Left
+                        playerLabel.TextScaled = deviceType == "Mobile"
+                        playerLabel.Parent = playerFrame
+                        
+                        local roleLabel = Instance.new("TextLabel")
+                        roleLabel.Size = UDim2.new(0.35, -80, 0.5, 0)
+                        roleLabel.Position = UDim2.new(0, getSize(70, 80, 90), 0.5, 0)
+                        roleLabel.BackgroundTransparency = 1
+                        roleLabel.Text = getPlayerRole(p)
+                        roleLabel.TextColor3 = getRoleColor(getPlayerRole(p))
+                        roleLabel.TextSize = getFontSize("Text") - 2
+                        roleLabel.Font = Enum.Font.Gotham
+                        roleLabel.TextXAlignment = Enum.TextXAlignment.Left
+                        roleLabel.TextScaled = deviceType == "Mobile"
+                        roleLabel.Parent = playerFrame
+                        
+                        -- Action Buttons
+                        local buttonWidth = getSize(45, 55, 65)
+                        local buttonHeight = getSize(25, 30, 35)
+                        local buttonSpacing = 5
+                        
+                        local teleportBtn = Instance.new("TextButton")
+                        teleportBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
+                        teleportBtn.Position = UDim2.new(1, -(buttonWidth * 3 + buttonSpacing * 2 + 10), 0.5, -buttonHeight/2)
+                        teleportBtn.BackgroundColor3 = CONFIG.Colors.Accent
+                        teleportBtn.BorderSizePixel = 0
+                        teleportBtn.Text = "TP"
+                        teleportBtn.TextColor3 = CONFIG.Colors.Text
+                        teleportBtn.TextSize = getFontSize("Text")
+                        teleportBtn.Font = Enum.Font.GothamBold
+                        teleportBtn.Parent = playerFrame
+                        
+                        local tpCorner = Instance.new("UICorner")
+                        tpCorner.CornerRadius = UDim.new(0, 6)
+                        tpCorner.Parent = teleportBtn
+                        
+                        local aimBtn = Instance.new("TextButton")
+                        aimBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
+                        aimBtn.Position = UDim2.new(1, -(buttonWidth * 2 + buttonSpacing + 10), 0.5, -buttonHeight/2)
+                        aimBtn.BackgroundColor3 = CONFIG.Colors.Warning
+                        aimBtn.BorderSizePixel = 0
+                        aimBtn.Text = "AIM"
+                        aimBtn.TextColor3 = CONFIG.Colors.Text
+                        aimBtn.TextSize = getFontSize("Text")
+                        aimBtn.Font = Enum.Font.GothamBold
+                        aimBtn.Parent = playerFrame
+                        
+                        local aimCorner = Instance.new("UICorner")
+                        aimCorner.CornerRadius = UDim.new(0, 6)
+                        aimCorner.Parent = aimBtn
+                        
+                        local killBtn = Instance.new("TextButton")
+                        killBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
+                        killBtn.Position = UDim2.new(1, -(buttonWidth + 10), 0.5, -buttonHeight/2)
+                        killBtn.BackgroundColor3 = CONFIG.Colors.Danger
+                        killBtn.BorderSizePixel = 0
+                        killBtn.Text = "KILL"
+                        killBtn.TextColor3 = CONFIG.Colors.Text
+                        killBtn.TextSize = getFontSize("Text")
+                        killBtn.Font = Enum.Font.GothamBold
+                        killBtn.Parent = playerFrame
+                        
+                        local killCorner = Instance.new("UICorner")
+                        killCorner.CornerRadius = UDim.new(0, 6)
+                        killCorner.Parent = killBtn
+                        
+                        -- Button Functionality
+                        teleportBtn.MouseButton1Click:Connect(function()
+                            teleportToPlayer(p)
+                        end)
+                        
+                        aimBtn.MouseButton1Click:Connect(function()
+                            gameState.aimTarget = p
+                            createNotification("Target", "Set aim target to " .. p.DisplayName, 2, "info")
+                        end)
+                        
+                        killBtn.MouseButton1Click:Connect(function()
+                            local role = getPlayerRole(player)
+                            if role == "Murderer" then
+                                stabPlayer(p)
+                            elseif role == "Sheriff" then
+                                shootGun(p)
+                            else
+                                createNotification("Error", "You need a weapon to kill", 2, "error")
+                            end
+                        end)
+                    end
+                end
+            end
+            
+            updatePlayerList()
+            
+            -- Update player list every 2 seconds
+            spawn(function()
+                while playersCard and playersCard.Parent do
+                    wait(2)
+                    updatePlayerList()
+                end
+            end)
+            
+        elseif gameState.currentTab == "Chat" then
+            -- Chat Card
+            local chatCard = createCard(contentScroller, "Chat System")
+            
+            -- Chat History
+            local chatFrame = Instance.new("ScrollingFrame")
+            chatFrame.Size = UDim2.new(1, 0, 0, 200)
+            chatFrame.BackgroundColor3 = CONFIG.Colors.Tertiary
+            chatFrame.BorderSizePixel = 0
+            chatFrame.ScrollBarThickness = 4
+            chatFrame.ScrollBarImageColor3 = CONFIG.Colors.Accent
+            chatFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+            chatFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+            chatFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+            chatFrame.Parent = chatCard
+            
+            local chatLayout = Instance.new("UIListLayout")
+            chatLayout.Padding = UDim.new(0, 5)
+            chatLayout.SortOrder = Enum.SortOrder.LayoutOrder
+            chatLayout.Parent = chatFrame
+            
+            local chatPadding = Instance.new("UIPadding")
+            chatPadding.PaddingLeft = UDim.new(0, 5)
+            chatPadding.PaddingRight = UDim.new(0, 5)
+            chatPadding.PaddingTop = UDim.new(0, 5)
+            chatPadding.PaddingBottom = UDim.new(0, 5)
+            chatPadding.Parent = chatFrame
+            
+            -- Input Area
+            local inputFrame = Instance.new("Frame")
+            inputFrame.Size = UDim2.new(1, 0, 0, 40)
+            inputFrame.BackgroundTransparency = 1
+            inputFrame.LayoutOrder = 2
+            inputFrame.Parent = chatCard
+            
+            local inputBox = Instance.new("TextBox")
+    inputBox.Size = UDim2.new(0.7, 0, 1, 0)
+    inputBox.BackgroundColor3 = CONFIG.Colors.Secondary
+    inputBox.BorderSizePixel = 0
+    inputBox.Text = ""
+    inputBox.PlaceholderText = "Type your message..."
+    inputBox.TextColor3 = CONFIG.Colors.Text
+    inputBox.TextSize = getFontSize("Text")
+    inputBox.Font = Enum.Font.Gotham
+    inputBox.Parent = inputFrame
+    
+    local inputCorner = Instance.new("UICorner")
+    inputCorner.CornerRadius = UDim.new(0, 6)
+    inputCorner.Parent = inputBox
+    
+    local sendButton = createButton(inputFrame, "Send", function()
+        local message = inputBox.Text
+        if message ~= "" then
+            -- Add to chat history
+            local msgLabel = Instance.new("TextLabel")
+            msgLabel.Size = UDim2.new(1, 0, 0, 20)
+            msgLabel.BackgroundTransparency = 1
+            msgLabel.Text = player.Name .. ": " .. message
+            msgLabel.TextColor3 = CONFIG.Colors.Text
+            msgLabel.TextSize = getFontSize("Text")
+            msgLabel.Font = Enum.Font.Gotham
+            msgLabel.TextXAlignment = Enum.TextXAlignment.Left
+            msgLabel.TextWrapped = true
+            msgLabel.AutomaticSize = Enum.AutomaticSize.Y
+            msgLabel.Parent = chatFrame
+            
+            -- Scroll to bottom
+            chatFrame.CanvasPosition = Vector2.new(0, chatFrame.CanvasSize.Y.Offset)
+            
+            inputBox.Text = ""
+        end
+    end)
+    sendButton.Size = UDim2.new(0.25, -5, 1, 0)
+    sendButton.Position = UDim2.new(0.75, 5, 0, 0)
+    
+    -- Chat commands
+    local commandsCard = createCard(contentScroller, "Chat Commands")
+    
+    local commandsText = Instance.new("TextLabel")
+    commandsText.Size = UDim2.new(1, 0, 0, 100)
+    commandsText.BackgroundTransparency = 1
+    commandsText.Text = "Available Commands:\n!tp [player] - Teleport to player\n!gun - Teleport to gun\n!coins - Teleport to nearest coin\n!role - Show your current role"
+    commandsText.TextColor3 = CONFIG.Colors.TextSecondary
+    commandsText.TextSize = getFontSize("Text")
+    commandsText.Font = Enum.Font.Gotham
+    commandsText.TextWrapped = true
+    commandsText.TextYAlignment = Enum.TextYAlignment.Top
+    commandsText.Parent = commandsCard
+    
+        elseif gameState.currentTab == "Noob" then
+            -- Noob Card
+            local noobCard = createCard(contentScroller, "Noob Mode")
+            
+            createToggle(noobCard, "Enable Noob Mode", gameState.noobMode, function(enabled)
+                gameState.noobMode = enabled
+                if enabled then
+                    -- Enable helpful features
+                    gameState.autoPickupCoins = true
+                    gameState.autoPickupGun = true
+                    gameState.easyAimbot = true
+                    gameState.espEnabled = true
+                    gameState.speedEnabled = true
+                    gameState.walkSpeed = 30
+                    
+                    createNotification("Noob Mode", "All beginner features enabled", 3, "success")
+                else
+                    -- Disable noob features
+                    gameState.autoPickupCoins = false
+                    gameState.autoPickupGun = false
+                    gameState.easyAimbot = false
+                end
+            end)
+            
+            createToggle(noobCard, "Auto Pickup Coins", gameState.autoPickupCoins, function(enabled)
+                gameState.autoPickupCoins = enabled
+            end)
+            
+            createToggle(noobCard, "Auto Pickup Gun", gameState.autoPickupGun, function(enabled)
+                gameState.autoPickupGun = enabled
+            end)
+            
+            createToggle(noobCard, "Easy Aimbot", gameState.easyAimbot, function(enabled)
+                gameState.easyAimbot = enabled
+                if enabled then
+                    gameState.aimbotEnabled = true
+                    gameState.silentAimEnabled = true
+                    gameState.aimFOV = 120
+                    gameState.aimSmoothing = 10
+                    toggleAimbot(true)
+                else
+                    toggleAimbot(false)
+                end
+            end)
+            
+            local tipsCard = createCard(contentScroller, "Beginner Tips")
+            
+            local tipsText = Instance.new("TextLabel")
+            tipsText.Size = UDim2.new(1, 0, 0, 120)
+            tipsText.BackgroundTransparency = 1
+            tipsText.Text = "Tips for New Players:\n1. Enable Noob Mode for auto-help\n2. Auto Pickup collects coins and guns\n3. Easy Aimbot helps you target enemies\n4. Use ESP to see player roles\n5. Speed boost helps you move faster"
+            tipsText.TextColor3 = CONFIG.Colors.TextSecondary
+            tipsText.TextSize = getFontSize("Text")
+            tipsText.Font = Enum.Font.Gotham
+            tipsText.TextWrapped = true
+            tipsText.TextYAlignment = Enum.TextYAlignment.Top
+            tipsText.Parent = tipsCard
+            
+        elseif gameState.currentTab == "Settings" then
+            -- Settings Card
+            local settingsCard = createCard(contentScroller, "Settings")
+            
+            createButton(settingsCard, "Reset All Settings", function()
+                -- Reset all game state
+                gameState.espEnabled = false
+                gameState.noclipEnabled = false
+                gameState.speedEnabled = false
+                gameState.aimbotEnabled = false
+                gameState.autoShootEnabled = false
+                gameState.autoThrowEnabled = false
+                gameState.killAuraEnabled = false
+                gameState.autoPickupCoins = false
+                gameState.autoPickupGun = false
+                gameState.easyAimbot = false
+                gameState.noobMode = false
+                gameState.coinFarmEnabled = false
+                gameState.flingEnabled = false
+                gameState.debugMode = false
+                
+                -- Disconnect all connections
+                for _, connection in pairs(gameState.connections) do
+                    if connection then
+                        connection:Disconnect()
+                    end
+                end
+                gameState.connections = {}
+                
+                -- Clean up ESP
+                toggleESP(false)
+                
+                createNotification("Settings", "All settings reset", 2, "success")
+                updateTabContent()
+            end)
+            
+            createButton(settingsCard, "Rejoin Server", function()
+                game:GetService("TeleportService"):Teleport(game.PlaceId, player)
+            end)
+            
+            -- Debug Mode Toggle
+            createToggle(settingsCard, "Debug Mode", gameState.debugMode, function(enabled)
+                gameState.debugMode = enabled
+                createNotification("Debug", enabled and "Enabled" or "Disabled", 2, "info")
+            end)
+            
+            -- Info Card
+            local infoCard = createCard(contentScroller, "Information")
+            
+            local infoText = Instance.new("TextLabel")
+            infoText.Size = UDim2.new(1, 0, 0, 140)
+            infoText.BackgroundTransparency = 1
+            infoText.Text = "QEX v" .. CONFIG.Version .. "\n\n✅ UPDATED WITH WORKING MM2 REMOTES!\n\nThank you for using QEX. I'm the owner, @Iz9vs2k\n\nFeatures:\n• Fixed Fling System\n• Added Debug Mode\n• Complete ESP System\n• Movement Enhancements\n• Player Management\n• Profile Photos\n• Mobile Control Panel\n• Fixed Dragging System\n• Responsive Design for " .. deviceType
+            infoText.TextColor3 = CONFIG.Colors.TextSecondary
+            infoText.TextSize = getFontSize("Text")
+            infoText.Font = Enum.Font.Gotham
+            infoText.TextWrapped = true
+            infoText.TextYAlignment = Enum.TextYAlignment.Top
+            infoText.Parent = infoCard
+        end
+    end
+    
+    -- Tab Button Functionality
+    for tabName, button in pairs(tabButtons) do
+        local function selectTab()
+            gameState.currentTab = tabName
+            
+            -- Update button appearances
+            for name, btn in pairs(tabButtons) do
+                local isActive = (name == tabName)
+                TweenService:Create(btn, TweenInfo.new(0.2), {
+                    BackgroundColor3 = isActive and CONFIG.Colors.Accent or CONFIG.Colors.Primary,
+                    TextColor3 = isActive and CONFIG.Colors.Primary or CONFIG.Colors.Text
+                }):Play()
+            end
+            
+            updateTabContent()
+        end
+        
+        -- Mouse click
+        button.MouseButton1Click:Connect(selectTab)
+        
+        -- Touch support
+        button.TouchTap:Connect(selectTab)
+        
+        -- Additional mobile support
+        button.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.Touch then
+                selectTab()
+            end
+        end)
+    end
+    
+    -- FIXED DRAGGING SYSTEM
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+    
+    -- Drag handle (invisible frame covering the top of the UI)
+    local dragHandle = Instance.new("Frame")
+    dragHandle.Size = UDim2.new(1, 0, 0, 50)
+    dragHandle.Position = UDim2.new(0, 0, 0, 0)
+    dragHandle.BackgroundTransparency = 1
+    dragHandle.Parent = mainContainer
+    
+    local function startDrag(input)
+        if not dragging then
+            dragging = true
+            dragStart = input.Position
+            startPos = mainContainer.Position
+            
+            -- IMPORTANT FIX: Set the AnchorPoint to (0,0) when starting drag
+            mainContainer.AnchorPoint = Vector2.new(0, 0)
+        end
+    end
+    
+    local function updateDrag(input)
+        if dragging and dragStart and startPos then
+            local delta = input.Position - dragStart
+            
+            -- FIXED: Use absolute position calculation
+            local newPosition = UDim2.new(
+                0, 
+                startPos.X.Offset + delta.X,
+                0, 
+                startPos.Y.Offset + delta.Y
+            )
+            
+            -- Keep UI within screen bounds
+            local screenSize = camera.ViewportSize
+            local uiSize = mainContainer.AbsoluteSize
+            
+            local clampedX = math.clamp(newPosition.X.Offset, 0, screenSize.X - uiSize.X)
+            local clampedY = math.clamp(newPosition.Y.Offset, 0, screenSize.Y - uiSize.Y)
+            
+            mainContainer.Position = UDim2.new(0, clampedX, 0, clampedY)
+        end
+    end
+    
+    local function stopDrag()
+        dragging = false
+        dragStart = nil
+        startPos = nil
+    end
+    
+    -- Mouse dragging
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            startDrag(input)
+        end
+    end)
+    
+    -- Touch dragging
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.Touch then
+            startDrag(input)
+        end
+    end)
+    
+    UserInputService.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            updateDrag(input)
+        end
+    end)
+    
+    UserInputService.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            stopDrag()
+        end
+    end)
+    
+    -- Initialize with Home tab
+    updateTabContent()
+    
+    return screenGui
+end
+
+-- Main Execution
+local function initialize()
+    createNotification("QEX", "Loading v" .. CONFIG.Version .. " for " .. deviceType, 3, "success")
+    
+    -- Setup manual controls
+    setupManualControls()
+    
+    -- Find coin remote
+    findCoinRemote()
+    
+    -- Create main UI
+    local ui = createMainUI()
+    
+    -- Main update loop
+    gameState.connections.mainLoop = RunService.Heartbeat:Connect(function()
+        updateGameData()
+        updateESP()
+        
+        -- Fling system update
+        if gameState.flingEnabled and player.Character then
+            for part, _ in pairs(flingParts) do
+                if part and part.Parent then
+                    part.Velocity = flingVelocity
+                end
+            end
+        end
+    end)
+    
+    -- Keybind to toggle UI
+    UserInputService.InputBegan:Connect(function(input, gameProcessed)
+        if gameProcessed then return end
+        
+        if input.KeyCode == Enum.KeyCode.RightControl then
+            gameState.uiVisible = not gameState.uiVisible
+            ui.Enabled = gameState.uiVisible
+            
+            if gameState.uiVisible then
+                createNotification("QEX", "UI shown", 1, "info")
+            else
+                createNotification("QEX", "UI hidden", 1, "info")
+            end
+        end
+    end)
+    
+    -- Character respawn handling
+    player.CharacterAdded:Connect(function(character)
+        wait(1) -- Wait for character to fully load
+        
+        -- Reapply movement settings
+        if gameState.speedEnabled then
+            toggleSpeed(true)
+        end
+        
+        if gameState.noclipEnabled then
+            toggleNoclip(true)
+        end
+    end)
+    
+    createNotification("QEX", "Successfully loaded with FIXED MM2 REMOTES!\n\nAll functions working:\n• Fixed Gun Shooting\n• Fixed Knife Functions\n• Added Fling System\n• Added Debug Mode\n• Fixed UI Dragging\n\nControls:\n• Q - Quick Shoot\n• R - Quick Throw\n• E - Manual Stab\n• Left Click - Manual Shoot\n• Right Click - Manual Throw\n• Mobile Control Panel Available\n• RightControl - Toggle UI", 10, "success")
+end
+
+-- Start the script
+initialize()
+
+-- Cleanup on script removal
+game:GetService("Players").PlayerRemoving:Connect(function(p)
+    if p == player then
+        -- Clean up all connections
+        for _, connection in pairs(gameState.connections) do
+            if connection then
+                connection:Disconnect()
+            end
+        end
+        
+        -- Clean up ESP
+        toggleESP(false)
+        
+        -- Clean up fling
+        toggleFling(false)
+    end
+end)
+
+print("QEX v" .. CONFIG.Version .. " loaded successfully!")
+print("Device: " .. deviceType)
+print("✅ ALL FUNCTIONS WORKING WITH FIXED MM2 REMOTES!")
+print("Controls:")
+print("• Q - Quick Shoot")
+print("• R - Quick Throw") 
+print("• E - Manual Stab")
+print("• Left Click - Manual Shoot")
+print("• Right Click - Manual Throw")
+print("• Mobile Control Panel Available")
+print("• RightControl - Toggle UI")
