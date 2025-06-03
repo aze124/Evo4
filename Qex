@@ -1,7 +1,11 @@
 -- QEX - COMPLETE with Updated MM2 Remotes
--- Version 5.3 - Fixed Fling System + Debug Feature
+-- Version 5.7 - Integrated All Requested Features
 -- Updated with current Murder Mystery 2 remotes
 -- Integrated Coin Farmer by Zo (V3) with UI
+-- Added Gun Remote: game.replicatedstorage.remotes.grabgun:FireServer(game.Workspace.GunDrop)
+-- Added MM2 Ultimate Hack by Zo (Coin ESP, Gun ESP, Fling, Auto-Grab Gun)
+-- Added Knife Throw Prediction System
+-- Added Gun Shooting Prediction System
 
 local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
@@ -12,6 +16,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
 local TextChatService = game:GetService("TextChatService")
+local Debris = game:GetService("Debris")
 
 -- Core Variables
 local player = Players.LocalPlayer
@@ -39,33 +44,9 @@ local CONFIG = {
         GunDrop = Color3.fromRGB(255, 220, 100),
         Coin = Color3.fromRGB(255, 200, 50)
     },
-    Version = "5.3",
+    Version = "5.7",
     UpdateRate = 0.1
 }
-
--- Device Detection
-local deviceType = ""
-local screenSize = camera.ViewportSize
-
-if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
-    deviceType = screenSize.X < 768 and "Mobile" or "Tablet"
-else
-    deviceType = "Desktop"
-end
-
--- Responsive Functions
-local function getSize(mobile, tablet, desktop)
-    return deviceType == "Mobile" and mobile or deviceType == "Tablet" and tablet or desktop
-end
-
-local function getFontSize(type)
-    local sizes = {
-        Mobile = {Title = 18, Subtitle = 14, Button = 12, Text = 10},
-        Tablet = {Title = 22, Subtitle = 16, Button = 14, Text = 12},
-        Desktop = {Title = 26, Subtitle = 18, Button = 16, Text = 14}
-    }
-    return sizes[deviceType][type] or sizes.Desktop[type]
-end
 
 -- Game State Management
 local gameState = {
@@ -91,7 +72,7 @@ local gameState = {
     speedEnabled = false,
     infiniteJumpEnabled = false,
     invisibilityEnabled = false,
-    flingEnabled = false, -- New fling state
+    flingEnabled = false,
     
     -- Aimbot Settings
     aimbotEnabled = false,
@@ -142,7 +123,12 @@ local gameState = {
     easyAimbot = false,
     chatEnabled = true,
     noobMode = false,
-    debugMode = false, -- New debug state
+    debugMode = false,
+    
+    -- Chat Spam
+    chatSpamEnabled = false,
+    chatSpamMessage = "QEX ON TOP!",
+    chatSpamDelay = 1,
     
     -- Coin Farming
     coinFarmSpeed = 2,
@@ -154,29 +140,254 @@ local gameState = {
     tracers = {},
     labels = {},
     notifications = {},
-    chatMessages = {},
+    coinEspObjects = {},
+    gunEspObject = nil,
     
     -- Performance
     lastUpdate = tick(),
-    updateInterval = CONFIG.UpdateRate
+    updateInterval = CONFIG.UpdateRate,
+    
+    -- New Hack Variables
+    coinRemote = nil,
+    gunRemote = nil,
+    coinContainer = nil
 }
 
--- Coin Farming Variables
-local coinRemote = nil
-
--- Fling system variables
-local flingParts = {}
-local flingVelocity = Vector3.new(0, 0, 0)
-
--- Debug logging function
-local function debugLog(message)
+-- Fixed debug logging function
+gameState.debugLog = function(message)
     if gameState.debugMode then
         print("[DEBUG] " .. message)
-        createNotification("DEBUG", message, 3, "info")
+        if gameState.createNotification then
+            gameState.createNotification("DEBUG", message, 3, "info")
+        end
     end
 end
 
--- Prediction function for target movement
+-- Device Detection
+local deviceType = ""
+local screenSize = camera.ViewportSize
+
+if UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled then
+    deviceType = screenSize.X < 768 and "Mobile" or "Tablet"
+else
+    deviceType = "Desktop"
+end
+
+-- Responsive Functions
+local function getSize(mobile, tablet, desktop)
+    return deviceType == "Mobile" and mobile or deviceType == "Tablet" and tablet or desktop
+end
+
+local function getFontSize(type)
+    local sizes = {
+        Mobile = {Title = 18, Subtitle = 14, Button = 12, Text = 10},
+        Tablet = {Title = 22, Subtitle = 16, Button = 14, Text = 12},
+        Desktop = {Title = 26, Subtitle = 18, Button = 16, Text = 14}
+    }
+    return sizes[deviceType][type] or sizes.Desktop[type]
+end
+
+-- ==================== NEW FEATURES START ====================
+
+-- Find CoinContainer
+local function findCoinContainer()
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj.Name == "CoinContainer" or string.find(string.lower(obj.Name), "coin") then
+            gameState.coinContainer = obj
+            gameState.debugLog("Found CoinContainer: " .. obj:GetFullName() .. " 📍")
+            return
+        end
+    end
+    gameState.debugLog("CoinContainer not found, retrying... 😡")
+end
+
+-- Extract Remotes
+local function extractRemotes()
+    gameState.debugLog("Scanning for remotes... 😈")
+    for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            local name = obj:GetFullName()
+            if string.find(string.lower(name), "coin") or string.find(string.lower(name), "collect") then
+                gameState.coinRemote = obj
+                gameState.debugLog("Found coin remote: " .. name .. " 🪙")
+            elseif string.find(string.lower(name), "gun") or string.find(string.lower(name), "pickup") then
+                gameState.gunRemote = obj
+                gameState.debugLog("Found gun remote: " .. name .. " 🔫")
+            end
+        end
+    end
+end
+
+-- Coin ESP
+local function addCoinESP(coin)
+    if not coin:FindFirstChild("CoinESP") then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "CoinESP"
+        highlight.FillColor = Color3.new(1, 1, 0) -- Yellow for coins
+        highlight.OutlineColor = Color3.new(1, 1, 1)
+        highlight.FillTransparency = 0.5
+        highlight.OutlineTransparency = 0
+        highlight.Parent = coin
+        gameState.debugLog("Added Coin ESP to: " .. coin:GetFullName() .. " ✨")
+    end
+end
+
+-- Gun ESP
+local function addGunESP(gun)
+    if not gun:FindFirstChild("GunESP") then
+        local highlight = Instance.new("Highlight")
+        highlight.Name = "GunESP"
+        highlight.FillColor = Color3.new(0, 0, 1) -- Blue for guns
+        highlight.OutlineColor = Color3.new(1, 1, 1)
+        highlight.FillTransparency = 0.5
+        highlight.OutlineTransparency = 0
+        highlight.Parent = gun
+        gameState.debugLog("Added Gun ESP to: " .. gun:GetFullName() .. " 🔫")
+    end
+end
+
+-- Auto-Grab Gun
+local function autoGrabGun()
+    for _, gun in pairs(Workspace:GetChildren()) do
+        if gun.Name == "GunDrop" and gun:IsA("BasePart") then
+            if gameState.gunDropESP then
+                addGunESP(gun)
+            end
+            pcall(function()
+                if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+                    player.Character.HumanoidRootPart.CFrame = gun.CFrame * CFrame.new(0, -2.5, 0)
+                end
+                if gameState.gunRemote then
+                    if gameState.gunRemote:IsA("RemoteEvent") then
+                        gameState.gunRemote:FireServer(gun)
+                    elseif gameState.gunRemote:IsA("RemoteFunction") then
+                        gameState.gunRemote:InvokeServer(gun)
+                    end
+                    gameState.debugLog("Invoked gun remote: " .. gun.Name .. " 🔫")
+                else
+                    if gun:FindFirstChild("TouchInterest") then
+                        firetouchinterest(player.Character.HumanoidRootPart, gun, 0)
+                        firetouchinterest(player.Character.HumanoidRootPart, gun, 1)
+                        gameState.debugLog("Fired touch interest for gun: " .. gun.Name .. " 🔫")
+                    end
+                end
+                task.wait(0.3)
+            end)
+        end
+    end
+end
+
+-- Fling Players (Zo's method)
+local function flingPlayers()
+    if not gameState.flingEnabled or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
+        return
+    end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+            local targetRoot = p.Character.HumanoidRootPart
+            local distance = (player.Character.HumanoidRootPart.Position - targetRoot.Position).Magnitude
+            if distance < 20 then
+                pcall(function()
+                    local bodyVelocity = Instance.new("BodyVelocity")
+                    bodyVelocity.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+                    bodyVelocity.Velocity = Vector3.new(math.random(-100, 100), 50, math.random(-100, 100)) * 5
+                    bodyVelocity.Parent = targetRoot
+                    Debris:AddItem(bodyVelocity, 0.2)
+                    gameState.debugLog("Flung player: " .. p.Name .. " 🚀")
+                end)
+            end
+        end
+    end
+end
+
+-- Knife Throw Prediction System
+local KNIFE_NAMES = {"Knife", "Dagger"}
+local THROW_EVENT_NAME = "Throw"
+
+local function isGunTool(tool)
+    if not tool then return false end
+    for _, knifeName in ipairs(KNIFE_NAMES) do
+        if tool.Name:lower():find(knifeName:lower()) then
+            return false
+        end
+    end
+    return true
+end
+
+local function getThrowTarget()
+    local closestTarget = nil
+    local closestDistance = 100
+    local localPos = player.Character.HumanoidRootPart.Position
+
+    for _, targetPlayer in ipairs(Players:GetPlayers()) do
+        if targetPlayer ~= player and targetPlayer.Character and targetPlayer.Character:FindFirstChild("Humanoid") and targetPlayer.Character.Humanoid.Health > 0 then
+            local targetRoot = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            local targetTool = targetPlayer.Character:FindFirstChildOfClass("Tool")
+            if targetRoot and isGunTool(targetTool) then
+                local distance = (targetRoot.Position - localPos).Magnitude
+                if distance < closestDistance then
+                    closestDistance = distance
+                    closestTarget = targetPlayer
+                end
+            end
+        end
+    end
+
+    return closestTarget
+end
+
+local function predictThrowPosition(target)
+    local targetRoot = target.Character:FindFirstChild("HumanoidRootPart")
+    if not targetRoot then return nil end
+
+    local currentPos = targetRoot.Position
+    local velocity = targetRoot.Velocity
+    local predictedPos = currentPos + velocity * PREDICTION_TIME
+    return predictedPos
+end
+
+-- Gun Shooting Prediction System
+local GRAVITY = 196.2
+local PREDICTION_FACTOR = 0.1
+
+local function findKnifePlayer()
+    for _, targetPlayer in ipairs(Players:GetPlayers()) do
+        if targetPlayer ~= player and targetPlayer.Character and targetPlayer.Character:FindFirstChildOfClass("Tool") then
+            local tool = targetPlayer.Character:FindFirstChildOfClass("Tool")
+            if tool and tool.Name:lower():find("knife") then
+                return targetPlayer
+            end
+        end
+    end
+    return nil
+end
+
+local function predictShotPosition(target)
+    if not target.Character or not target.Character:FindFirstChild("HumanoidRootPart") then
+        return nil
+    end
+
+    local rootPart = target.Character.HumanoidRootPart
+    local velocity = rootPart.Velocity
+    local currentPos = rootPart.Position
+    local ping = player:GetNetworkPing() or 0.1
+    local timeAhead = PREDICTION_FACTOR + ping
+
+    -- Predict future position based on velocity
+    local predictedPos = currentPos + velocity * timeAhead
+
+    -- Adjust for gravity if airborne
+    local humanoid = target.Character:FindFirstChild("Humanoid")
+    if humanoid and humanoid.FloorMaterial == Enum.Material.Air then
+        predictedPos = predictedPos - Vector3.new(0, 0.5 * GRAVITY * timeAhead^2, 0)
+    end
+
+    return predictedPos
+end
+
+-- ==================== NEW FEATURES END ====================
+
+-- Improved prediction function for target movement
 local function predictPosition(targetPlayer, position, predictJump, predictAirShot, deltaTime)
     if not targetPlayer or not position then
         return position
@@ -194,13 +405,19 @@ local function predictPosition(targetPlayer, position, predictJump, predictAirSh
         return predictedPos
     end
 
+    -- Calculate velocity
+    local velocity = rootPart.Velocity
+    local timeToTarget = (position - camera.CFrame.Position).Magnitude / 1000
+    
+    -- Predict jump
     if predictJump and (humanoid.Jump or rootPart.Velocity.Y > 10) then
-        predictedPos = predictedPos + Vector3.new(0, 5, 0)
+        predictedPos = predictedPos + Vector3.new(0, 5 + (velocity.Y * timeToTarget), 0)
     end
 
+    -- Predict air shot
     if predictAirShot and humanoid.FloorMaterial == Enum.Material.Air then
-        local velocity = rootPart.Velocity
-        predictedPos = predictedPos + velocity * deltaTime + Vector3.new(0, -0.5 * gravity * deltaTime * deltaTime, 0)
+        local gravityFactor = 0.5 * gravity * timeToTarget * timeToTarget
+        predictedPos = predictedPos + velocity * timeToTarget + Vector3.new(0, gravityFactor, 0)
     end
 
     return predictedPos
@@ -210,43 +427,54 @@ end
 -- Function to invoke gun tweak
 local function invokeGunTweak(position)
     if player.Character and player.Character:FindFirstChild("Gun") then
-        local args = {
-            [1] = 1,
-            [2] = position,
-            [3] = "AH2"
-        }
-        local success, err = pcall(function()
-            player.Character.Gun.KnifeLocal.CreateBeam.RemoteFunction:InvokeServer(unpack(args))
-        end)
-        if not success then
-            warn("Gun tweak invocation failed: " .. tostring(err))
-            debugLog("Gun tweak failed: " .. tostring(err))
-            return false
+        local gun = player.Character.Gun
+        local knifeLocal = gun:FindFirstChild("KnifeLocal")
+        if knifeLocal and knifeLocal:FindFirstChild("CreateBeam") then
+            local remoteFunction = knifeLocal.CreateBeam:FindFirstChildOfClass("RemoteFunction")
+            if remoteFunction then
+                local args = {
+                    [1] = 1,
+                    [2] = position,
+                    [3] = "AH2"
+                }
+                local success, err = pcall(function()
+                    remoteFunction:InvokeServer(unpack(args))
+                end)
+                if success then
+                    return true
+                else
+                    warn("Gun tweak invocation failed: " .. tostring(err))
+                    gameState.debugLog("Gun tweak failed: " .. tostring(err))
+                end
+            end
         end
-        return true
     end
     return false
 end
 
 -- Function to invoke knife stab
 local function invokeKnifeStab()
-    if player.Character and player.Character:FindFirstChild("Knife") then
-        local success, err = pcall(function()
-            local args = { [1] = "Slash" }
-            player:WaitForChild("Stab"):FireServer(unpack(args))
-        end)
-        if not success then
-            warn("Knife stab invocation failed: " .. tostring(err))
-            debugLog("Knife stab failed: " .. tostring(err))
-            return false
-        end
+    local stab = player:FindFirstChild("Stab")
+    if not stab then return false end
+
+    local success, err = pcall(function()
+        local args = { [1] = "Slash" }
+        stab:FireServer(unpack(args))
+    end)
+    if success then
         return true
+    else
+        warn("Knife stab invocation failed: " .. tostring(err))
+        gameState.debugLog("Knife stab failed: " .. tostring(err))
+        return false
     end
-    return false
 end
 
 -- Function to invoke knife throw
 local function invokeKnifeThrow(targetPosition)
+    local throw = player:FindFirstChild("Throw")
+    if not throw then return false end
+
     if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
         local originCFrame = player.Character.HumanoidRootPart.CFrame
         local success, err = pcall(function()
@@ -254,20 +482,21 @@ local function invokeKnifeThrow(targetPosition)
                 [1] = originCFrame,
                 [2] = targetPosition
             }
-            player:WaitForChild("Throw"):FireServer(unpack(args))
+            throw:FireServer(unpack(args))
         end)
-        if not success then
+        if success then
+            return true
+        else
             warn("Knife throw invocation failed: " .. tostring(err))
-            debugLog("Knife throw failed: " .. tostring(err))
+            gameState.debugLog("Knife throw failed: " .. tostring(err))
             return false
         end
-        return true
     end
     return false
 end
 
 -- Utility Functions
-local function createNotification(title, message, duration, type)
+gameState.createNotification = function(title, message, duration, type)
     duration = duration or 3
     type = type or "info"
     
@@ -401,9 +630,9 @@ local function updateGameData()
         end
     end
     
-    -- Update gun drop (fixed names)
+    -- Update gun drop (fixed names) - also search in descendants
     gameState.gunDrop = nil
-    for _, obj in ipairs(Workspace:GetChildren()) do
+    for _, obj in ipairs(Workspace:GetDescendants()) do
         if obj:IsA("Tool") and (obj.Name == "Gun" or obj.Name == "DropGun" or obj.Name == "GunDrop") and obj:FindFirstChild("Handle") then
             gameState.gunDrop = obj
             break
@@ -413,16 +642,31 @@ local function updateGameData()
     -- Update coins
     gameState.coins = {}
     for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and (obj.Name == "Coin" or obj.Name == "CoinContainer") then
+        if obj:IsA("Model") and (obj.Name == "Coin" or obj.Name == "CoinContainer") and obj:FindFirstChild("CoinVisual") then
             table.insert(gameState.coins, obj)
         end
     end
     
     -- Auto-pickup gun
     if gameState.autoPickupGun and gameState.gunDrop and gameState.gunDrop:FindFirstChild("ClickDetector") and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
-        if (player.Character.HumanoidRootPart.Position - gameState.gunDrop.Handle.Position).Magnitude < 10 then
+        local distance = (player.Character.HumanoidRootPart.Position - gameState.gunDrop.Handle.Position).Magnitude
+        if distance < 10 then
+            gameState.debugLog("Auto-picking up gun at distance: " .. distance)
             fireclickdetector(gameState.gunDrop.ClickDetector)
-            debugLog("Auto-picked up gun")
+            autoGrabGun() -- Added Zo's auto-grab gun method
+        end
+    end
+    
+    -- Auto-pickup coins
+    if gameState.autoPickupCoins and player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+        for _, coin in ipairs(gameState.coins) do
+            if coin and coin:FindFirstChild("CoinVisual") then
+                local distance = (player.Character.HumanoidRootPart.Position - coin.CoinVisual.Position).Magnitude
+                if distance < 10 then
+                    firetouchinterest(player.Character.HumanoidRootPart, coin.CoinVisual, 0)
+                    firetouchinterest(player.Character.HumanoidRootPart, coin.CoinVisual, 1)
+                end
+            end
         end
     end
 end
@@ -432,14 +676,17 @@ local function findCoinRemote()
     for _, obj in pairs(ReplicatedStorage:GetDescendants()) do
         if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) and 
            (string.find(string.lower(obj.Name), "coin") or string.find(string.lower(obj.Name), "collect")) then
-            coinRemote = obj
-            debugLog("Found coin remote: " .. obj:GetFullName())
+            gameState.coinRemote = obj
+            gameState.debugLog("Found coin remote: " .. obj:GetFullName())
             break
         end
     end
 end
 
 -- Fling System Functions
+local flingParts = {}
+local flingVelocity = Vector3.new(0, 0, 0)
+
 local function toggleFling(enabled)
     gameState.flingEnabled = enabled
     
@@ -458,7 +705,7 @@ local function toggleFling(enabled)
             
             -- Set fling velocity
             flingVelocity = Vector3.new(math.random(-100, 100), 100, math.random(-100, 100))
-            debugLog("Fling activated")
+            gameState.debugLog("Fling activated")
         end
     else
         -- Reset character
@@ -471,9 +718,26 @@ local function toggleFling(enabled)
             end
             flingParts = {}
             flingVelocity = Vector3.new(0, 0, 0)
-            debugLog("Fling deactivated")
+            gameState.debugLog("Fling deactivated")
         end
     end
+end
+
+local function flingPlayer(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then return end
+
+    local character = targetPlayer.Character
+    for _, part in ipairs(character:GetDescendants()) do
+        if part:IsA("BasePart") then
+            part.Velocity = Vector3.new(math.random(-1000,1000), 1000, math.random(-1000,1000))
+            part.RotVelocity = Vector3.new(math.random(-100,100), math.random(-100,100), math.random(-100,100))
+        end
+    end
+
+    -- Add Zo's fling method as well
+    flingPlayers()
+
+    gameState.createNotification("Fling", "Flinging " .. targetPlayer.Name, 2, "warning")
 end
 
 -- Coin Farming Functions
@@ -485,11 +749,13 @@ local function startCoinFarm()
         else
             local humanoidRootPart = character.HumanoidRootPart
 
-            local coinContainer = nil
-            for _, obj in pairs(Workspace:GetDescendants()) do
-                if obj.Name == "CoinContainer" or string.find(string.lower(obj.Name), "coin") then
-                    coinContainer = obj
-                    break
+            local coinContainer = gameState.coinContainer
+            if not coinContainer then
+                findCoinContainer()
+                task.wait(0.5)
+                if not coinContainer then
+                    gameState.debugLog("Coin container not found")
+                    return
                 end
             end
 
@@ -531,12 +797,12 @@ local function startCoinFarm()
                         end
 
                         -- Try to collect
-                        if coinRemote then
+                        if gameState.coinRemote then
                             pcall(function()
-                                if coinRemote:IsA("RemoteEvent") then
-                                    coinRemote:FireServer(coin)
-                                elseif coinRemote:IsA("RemoteFunction") then
-                                    coinRemote:InvokeServer(coin)
+                                if gameState.coinRemote:IsA("RemoteEvent") then
+                                    gameState.coinRemote:FireServer(coin)
+                                elseif gameState.coinRemote:IsA("RemoteFunction") then
+                                    gameState.coinRemote:InvokeServer(coin)
                                 end
                             end)
                         end
@@ -552,7 +818,7 @@ local function startCoinFarm()
                     end
                 end
             else
-                debugLog("Coin container not found")
+                gameState.debugLog("Coin container not found")
             end
         end
         task.wait(0.5)
@@ -627,44 +893,67 @@ local function shootGun(targetPlayer)
         return false
     end
     
-    -- Get predicted position
+    -- Get predicted position based on model
+    local predictionFactor = 0.2
+    if gameState.currentAimModel == "QEX-X4" then
+        predictionFactor = 0.15
+    elseif gameState.currentAimModel == "QEX-X3" then
+        predictionFactor = 0.1
+    end
+    
     local targetPos = predictPosition(
         targetPlayer,
         targetPlayer.Character.Head.Position,
         gameState.predictJump,
         gameState.predictAirShot,
-        0.2
+        predictionFactor
     )
     
     -- Use the updated gun tweak function
     local success = invokeGunTweak(targetPos)
     
     if success then
-        createNotification("Shoot", "Shot fired successfully!", 1, "success")
-        debugLog("Shot fired at " .. targetPlayer.Name)
+        gameState.debugLog("Shot fired at " .. targetPlayer.Name)
         return true
     else
-        createNotification("Shoot", "Failed to shoot", 1, "error")
-        debugLog("Failed to shoot")
+        gameState.debugLog("Failed to shoot")
         return false
     end
 end
 
-local function throwKnife(targetPosition)
+local function throwKnife(targetPlayer)
     if not player.Character or not player.Character:FindFirstChild("Knife") then
         return false
     end
     
+    if not targetPlayer or not targetPlayer.Character or not targetPlayer.Character:FindFirstChild("Head") then
+        return false
+    end
+    
+    -- Get predicted position based on knife model
+    local predictionFactor = 0.3
+    if gameState.currentKnifeModel == "QEX-MAX2" then
+        predictionFactor = 0.2
+    elseif gameState.currentKnifeModel == "QEX-MAX1" then
+        predictionFactor = 0.1
+    end
+    
+    local targetPos = predictPosition(
+        targetPlayer,
+        targetPlayer.Character.Head.Position,
+        gameState.predictJump,
+        gameState.predictAirShot,
+        predictionFactor
+    )
+    
     -- Use the updated knife throw function
-    local success = invokeKnifeThrow(targetPosition)
+    local success = invokeKnifeThrow(targetPos)
     
     if success then
-        createNotification("Throw", "Knife thrown successfully!", 1, "success")
-        debugLog("Knife thrown")
+        gameState.debugLog("Knife thrown at " .. targetPlayer.Name)
         return true
     else
-        createNotification("Throw", "Failed to throw knife", 1, "error")
-        debugLog("Failed to throw knife")
+        gameState.debugLog("Failed to throw knife")
         return false
     end
 end
@@ -678,12 +967,10 @@ local function stabPlayer(targetPlayer)
     local success = invokeKnifeStab()
     
     if success then
-        createNotification("Stab", "Stab executed successfully!", 1, "warning")
-        debugLog("Stabbed " .. targetPlayer.Name)
+        gameState.debugLog("Stabbed " .. targetPlayer.Name)
         return true
     else
-        createNotification("Stab", "Failed to stab", 1, "error")
-        debugLog("Failed to stab")
+        gameState.debugLog("Failed to stab")
         return false
     end
 end
@@ -711,16 +998,16 @@ local function toggleAutoShoot(enabled)
             end
         end)
         
-        createNotification("Auto Shoot", "Auto shoot enabled with " .. gameState.currentAimModel, 2, "success")
-        debugLog("Auto shoot enabled")
+        gameState.createNotification("Auto Shoot", "Auto shoot enabled with " .. gameState.currentAimModel, 2, "success")
+        gameState.debugLog("Auto shoot enabled")
     else
         if gameState.connections.autoShoot then
             gameState.connections.autoShoot:Disconnect()
             gameState.connections.autoShoot = nil
         end
         
-        createNotification("Auto Shoot", "Auto shoot disabled", 2, "info")
-        debugLog("Auto shoot disabled")
+        gameState.createNotification("Auto Shoot", "Auto shoot disabled", 2, "info")
+        gameState.debugLog("Auto shoot disabled")
     end
 end
 
@@ -740,38 +1027,22 @@ local function toggleAutoThrow(enabled)
             updateGameData()
             
             local target = gameState.aimTarget or gameState.sheriff or gameState.innocents[1]
-            if target and target.Character and target.Character:FindFirstChild("Head") then
-                local targetPos = target.Character.Head.Position
-                
-                if gameState.currentKnifeModel == "QEX-MAX3" then
-                    -- Advanced knife prediction
-                    if target.Character:FindFirstChild("HumanoidRootPart") then
-                        local velocity = target.Character.HumanoidRootPart.Velocity
-                        targetPos = targetPos + (velocity * 0.3) -- More prediction for knife
-                    end
-                elseif gameState.currentKnifeModel == "QEX-MAX2" then
-                    -- Medium knife prediction
-                    if target.Character:FindFirstChild("HumanoidRootPart") then
-                        local velocity = target.Character.HumanoidRootPart.Velocity
-                        targetPos = targetPos + (velocity * 0.15)
-                    end
-                end
-                
-                throwKnife(targetPos)
+            if target then
+                throwKnife(target)
                 wait(gameState.throwDelay)
             end
         end)
         
-        createNotification("Auto Throw", "Auto throw enabled with " .. gameState.currentKnifeModel, 2, "success")
-        debugLog("Auto throw enabled")
+        gameState.createNotification("Auto Throw", "Auto throw enabled with " .. gameState.currentKnifeModel, 2, "success")
+        gameState.debugLog("Auto throw enabled")
     else
         if gameState.connections.autoThrow then
             gameState.connections.autoThrow:Disconnect()
             gameState.connections.autoThrow = nil
         end
         
-        createNotification("Auto Throw", "Auto throw disabled", 2, "info")
-        debugLog("Auto throw disabled")
+        gameState.createNotification("Auto Throw", "Auto throw disabled", 2, "info")
+        gameState.debugLog("Auto throw disabled")
     end
 end
 
@@ -801,16 +1072,16 @@ local function toggleKillAura(enabled)
             end
         end)
         
-        createNotification("Kill Aura", "Kill aura enabled (Range: " .. gameState.killAuraRange .. ")", 2, "warning")
-        debugLog("Kill aura enabled")
+        gameState.createNotification("Kill Aura", "Kill aura enabled (Range: " .. gameState.killAuraRange .. ")", 2, "warning")
+        gameState.debugLog("Kill aura enabled")
     else
         if gameState.connections.killAura then
             gameState.connections.killAura:Disconnect()
             gameState.connections.killAura = nil
         end
         
-        createNotification("Kill Aura", "Kill aura disabled", 2, "info")
-        debugLog("Kill aura disabled")
+        gameState.createNotification("Kill Aura", "Kill aura disabled", 2, "info")
+        gameState.debugLog("Kill aura disabled")
     end
 end
 
@@ -831,8 +1102,8 @@ local function toggleAimbot(enabled)
             end
         end)
         
-        createNotification("Aimbot", "Aimbot enabled" .. (gameState.silentAimEnabled and " (Silent)" or ""), 2, "success")
-        debugLog("Aimbot enabled")
+        gameState.createNotification("Aimbot", "Aimbot enabled" .. (gameState.silentAimEnabled and " (Silent)" or ""), 2, "success")
+        gameState.debugLog("Aimbot enabled")
     else
         if gameState.connections.aimbot then
             gameState.connections.aimbot:Disconnect()
@@ -840,8 +1111,8 @@ local function toggleAimbot(enabled)
         end
         
         gameState.aimTarget = nil
-        createNotification("Aimbot", "Aimbot disabled", 2, "info")
-        debugLog("Aimbot disabled")
+        gameState.createNotification("Aimbot", "Aimbot disabled", 2, "info")
+        gameState.debugLog("Aimbot disabled")
     end
 end
 
@@ -925,13 +1196,91 @@ local function createPlayerESP(targetPlayer)
     end
 end
 
+-- Create ESP for objects (coins/guns)
+local function createObjectESP(object, objectType)
+    if not object or not object.PrimaryPart then return end
+
+    local color = objectType == "Coin" and CONFIG.Colors.Coin or CONFIG.Colors.GunDrop
+    local text = objectType
+
+    -- Create BillboardGui
+    local billboard = Instance.new("BillboardGui")
+    billboard.Adornee = object.PrimaryPart
+    billboard.Size = UDim2.new(0, 100, 0, 40)
+    billboard.AlwaysOnTop = true
+    billboard.StudsOffset = Vector3.new(0, 3, 0)
+
+    local textLabel = Instance.new("TextLabel")
+    textLabel.Size = UDim2.new(1, 0, 1, 0)
+    textLabel.BackgroundTransparency = 1
+    textLabel.Text = text
+    textLabel.TextColor3 = color
+    textLabel.TextStrokeTransparency = 0.5
+    textLabel.TextStrokeColor3 = Color3.new(0,0,0)
+    textLabel.TextSize = getFontSize("Text")
+    textLabel.Font = Enum.Font.GothamBold
+    textLabel.Parent = billboard
+
+    billboard.Parent = object.PrimaryPart
+
+    return billboard
+end
+
 local function updateESP()
-    if not gameState.espEnabled then return end
-    
+    -- Player ESP
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= player then
             createPlayerESP(p)
         end
+    end
+    
+    -- Clean up ESP for players that left
+    for player, esp in pairs(gameState.highlights) do
+        if not player:IsDescendantOf(game) then
+            esp:Destroy()
+            gameState.highlights[player] = nil
+        end
+    end
+    for player, label in pairs(gameState.labels) do
+        if not player:IsDescendantOf(game) then
+            label:Destroy()
+            gameState.labels[player] = nil
+        end
+    end
+    
+    -- Update Gun Drop ESP
+    if gameState.gunDropESP and gameState.gunDrop and gameState.gunDrop:FindFirstChild("Handle") then
+        if gameState.gunEspObject then
+            gameState.gunEspObject:Destroy()
+        end
+        gameState.gunEspObject = createObjectESP(gameState.gunDrop, "Gun")
+        -- Also add Zo's gun ESP
+        addGunESP(gameState.gunDrop.Handle)
+    else
+        if gameState.gunEspObject then
+            gameState.gunEspObject:Destroy()
+            gameState.gunEspObject = nil
+        end
+    end
+
+    -- Update Coin ESP
+    if gameState.coinESP then
+        for _, coin in ipairs(gameState.coins) do
+            if coin and coin:FindFirstChild("CoinVisual") then
+                if not gameState.coinEspObjects[coin] then
+                    gameState.coinEspObjects[coin] = createObjectESP(coin, "Coin")
+                end
+                -- Also add Zo's coin ESP
+                addCoinESP(coin.CoinVisual)
+            end
+        end
+    else
+        for coin, esp in pairs(gameState.coinEspObjects) do
+            if esp then
+                esp:Destroy()
+            end
+        end
+        gameState.coinEspObjects = {}
     end
 end
 
@@ -941,22 +1290,34 @@ local function toggleESP(enabled)
     if not enabled then
         -- Clean up all ESP elements
         for _, highlight in pairs(gameState.highlights) do
-            if highlight and highlight.Parent then
+            if highlight then
                 highlight:Destroy()
             end
         end
         
         for _, label in pairs(gameState.labels) do
-            if label and label.Parent then
+            if label then
                 label:Destroy()
             end
         end
         
+        for coin, esp in pairs(gameState.coinEspObjects) do
+            if esp then
+                esp:Destroy()
+            end
+        end
+        
+        if gameState.gunEspObject then
+            gameState.gunEspObject:Destroy()
+        end
+        
         gameState.highlights = {}
         gameState.labels = {}
-        debugLog("ESP disabled")
+        gameState.coinEspObjects = {}
+        gameState.gunEspObject = nil
+        gameState.debugLog("ESP disabled")
     else
-        debugLog("ESP enabled")
+        gameState.debugLog("ESP enabled")
     end
 end
 
@@ -979,8 +1340,8 @@ local function toggleNoclip(enabled)
             end
         end)
         
-        createNotification("Noclip", "Noclip enabled", 2, "success")
-        debugLog("Noclip enabled")
+        gameState.createNotification("Noclip", "Noclip enabled", 2, "success")
+        gameState.debugLog("Noclip enabled")
     else
         if gameState.connections.noclip then
             gameState.connections.noclip:Disconnect()
@@ -995,8 +1356,8 @@ local function toggleNoclip(enabled)
             end
         end
         
-        createNotification("Noclip", "Noclip disabled", 2, "info")
-        debugLog("Noclip disabled")
+        gameState.createNotification("Noclip", "Noclip disabled", 2, "info")
+        gameState.debugLog("Noclip disabled")
     end
 end
 
@@ -1007,14 +1368,14 @@ local function toggleSpeed(enabled)
         if player.Character and player.Character:FindFirstChild("Humanoid") then
             player.Character.Humanoid.WalkSpeed = gameState.walkSpeed
         end
-        createNotification("Speed", "Speed boost enabled (" .. gameState.walkSpeed .. ")", 2, "success")
-        debugLog("Speed enabled")
+        gameState.createNotification("Speed", "Speed boost enabled (" .. gameState.walkSpeed .. ")", 2, "success")
+        gameState.debugLog("Speed enabled")
     else
         if player.Character and player.Character:FindFirstChild("Humanoid") then
             player.Character.Humanoid.WalkSpeed = 16
         end
-        createNotification("Speed", "Speed boost disabled", 2, "info")
-        debugLog("Speed disabled")
+        gameState.createNotification("Speed", "Speed boost disabled", 2, "info")
+        gameState.debugLog("Speed disabled")
     end
 end
 
@@ -1025,22 +1386,56 @@ local function teleportToPlayer(targetPlayer)
     end
     
     player.Character.HumanoidRootPart.CFrame = targetPlayer.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
-    createNotification("Teleport", "Teleported to " .. targetPlayer.Name, 2, "success")
-    debugLog("Teleported to " .. targetPlayer.Name)
+    gameState.createNotification("Teleport", "Teleported to " .. targetPlayer.Name, 2, "success")
+    gameState.debugLog("Teleported to " .. targetPlayer.Name)
 end
 
 local function teleportToGun()
     updateGameData()
     
     if not gameState.gunDrop or not gameState.gunDrop:FindFirstChild("Handle") or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") then
-        createNotification("Teleport", "No gun found", 2, "error")
-        debugLog("Teleport failed: No gun found")
+        gameState.createNotification("Teleport", "No gun found", 2, "error")
+        gameState.debugLog("Teleport failed: No gun found")
         return
     end
     
     player.Character.HumanoidRootPart.CFrame = CFrame.new(gameState.gunDrop.Handle.Position + Vector3.new(0, 3, 0))
-    createNotification("Teleport", "Teleported to gun", 2, "success")
-    debugLog("Teleported to gun")
+    gameState.createNotification("Teleport", "Teleported to gun", 2, "success")
+    gameState.debugLog("Teleported to gun")
+end
+
+-- Chat Spam Functions
+local function startChatSpam()
+    while gameState.chatSpamEnabled do
+        if TextChatService then
+            TextChatService.TextChannels.RBXGeneral:SendAsync(gameState.chatSpamMessage)
+        else
+            -- Fallback for older chat system
+            game:GetService("ReplicatedStorage").DefaultChatSystemChatEvents.SayMessageRequest:FireServer(gameState.chatSpamMessage, "All")
+        end
+        wait(gameState.chatSpamDelay)
+    end
+end
+
+local function toggleChatSpam(enabled)
+    gameState.chatSpamEnabled = enabled
+    
+    if enabled then
+        if gameState.connections.chatSpam then
+            gameState.connections.chatSpam:Disconnect()
+        end
+        
+        gameState.connections.chatSpam = spawn(startChatSpam)
+        gameState.createNotification("Chat Spam", "Enabled: " .. gameState.chatSpamMessage, 3, "warning")
+        gameState.debugLog("Chat spam enabled")
+    else
+        if gameState.connections.chatSpam then
+            gameState.connections.chatSpam:Disconnect()
+            gameState.connections.chatSpam = nil
+        end
+        gameState.createNotification("Chat Spam", "Disabled", 2, "info")
+        gameState.debugLog("Chat spam disabled")
+    end
 end
 
 -- Manual Controls Setup with Updated Functions
@@ -1059,8 +1454,8 @@ local function setupManualControls()
     mouse.Button2Down:Connect(function()
         if gameState.manualThrowEnabled and getPlayerRole(player) == "Murderer" then
             local target = gameState.aimTarget or getClosestPlayerToMouse()
-            if target and target.Character and target.Character:FindFirstChild("Head") then
-                throwKnife(target.Character.Head.Position)
+            if target then
+                throwKnife(target)
             end
         end
     end)
@@ -1094,9 +1489,14 @@ local function setupManualControls()
             -- Quick throw
             if getPlayerRole(player) == "Murderer" then
                 local target = gameState.aimTarget or getClosestPlayerToMouse()
-                if target and target.Character and target.Character:FindFirstChild("Head") then
-                    throwKnife(target.Character.Head.Position)
+                if target then
+                    throwKnife(target)
                 end
+            end
+        elseif input.KeyCode == Enum.KeyCode.F then
+            -- Fling target
+            if gameState.aimTarget then
+                flingPlayer(gameState.aimTarget)
             end
         end
     end)
@@ -1309,8 +1709,8 @@ local function createDropdown(parent, text, options, default, callback)
     dropdownLabel.Parent = dropdownFrame
     
     local dropdownButton = Instance.new("TextButton")
-    dropdownButton.Size = UDim2.new(0.5, -10, 0, 30)
-    dropdownButton.Position = UDim2.new(0.5, 5, 0, 5)
+    dropdownButton.Size = UDim2.new(0.5, -10, 1, 0)
+    dropdownButton.Position = UDim2.new(0.5, 5, 0, 0)
     dropdownButton.BackgroundColor3 = CONFIG.Colors.Secondary
     dropdownButton.BorderSizePixel = 0
     dropdownButton.Text = default
@@ -1423,6 +1823,7 @@ local function createMobileControls(screenGui)
     
     local controlLayout = Instance.new("UIListLayout")
     controlLayout.Padding = UDim.new(0, 5)
+    controlLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
     controlLayout.SortOrder = Enum.SortOrder.LayoutOrder
     controlLayout.Parent = controlPanel
     
@@ -1467,7 +1868,7 @@ local function createMobileControls(screenGui)
                 shootGun(target)
             end
         else
-            createNotification("Error", "You need to be Sheriff", 2, "error")
+            gameState.createNotification("Error", "You need to be Sheriff", 2, "error")
         end
     end)
     
@@ -1490,11 +1891,11 @@ local function createMobileControls(screenGui)
     throwButton.MouseButton1Click:Connect(function()
         if getPlayerRole(player) == "Murderer" then
             local target = gameState.aimTarget or getClosestPlayerToMouse()
-            if target and target.Character and target.Character:FindFirstChild("Head") then
-                throwKnife(target.Character.Head.Position)
+            if target then
+                throwKnife(target)
             end
         else
-            createNotification("Error", "You need to be Murderer", 2, "error")
+            gameState.createNotification("Error", "You need to be Murderer", 2, "error")
         end
     end)
     
@@ -1526,7 +1927,7 @@ local function createMobileControls(screenGui)
                 end
             end
         else
-            createNotification("Error", "You need to be Murderer", 2, "error")
+            gameState.createNotification("Error", "You need to be Murderer", 2, "error")
         end
     end)
     
@@ -1622,9 +2023,9 @@ local function createFloatingToggleButton()
             mainUI.Enabled = gameState.uiVisible
             
             if gameState.uiVisible then
-                createNotification("QEX", "UI shown", 1, "info")
+                gameState.createNotification("QEX", "UI shown", 1, "info")
             else
-                createNotification("QEX", "UI hidden", 1, "info")
+                gameState.createNotification("QEX", "UI hidden", 1, "info")
             end
         end
     end)
@@ -1721,25 +2122,25 @@ local function createMainUI()
     -- Player Name (only show on tablet/desktop)
     if deviceType ~= "Mobile" then
         local playerName = Instance.new("TextLabel")
-        playerName.Size = UDim2.new(1, -10, 0, 20)
-        playerName.Position = UDim2.new(0, 5, 0, getSize(65, 75, 85))
+        playerName.Size = UDim2.new(1, -10, 0.5, 0)
+        playerName.Position = UDim2.new(0, 0, 0, getSize(65, 75, 85))
         playerName.BackgroundTransparency = 1
         playerName.Text = player.DisplayName
         playerName.TextColor3 = CONFIG.Colors.Text
         playerName.TextSize = getFontSize("Text")
         playerName.Font = Enum.Font.GothamBold
-        playerName.TextScaled = true
+        playerName.TextScaled = deviceType == "Mobile"
         playerName.Parent = profileFrame
         
         local playerRole = Instance.new("TextLabel")
-        playerRole.Size = UDim2.new(1, -10, 0, 15)
-        playerRole.Position = UDim2.new(0, 5, 0, getSize(85, 95, 105))
+        playerRole.Size = UDim2.new(1, -10, 0.5, 0)
+        playerRole.Position = UDim2.new(0, 0, 0.5, getSize(65, 75, 85))
         playerRole.BackgroundTransparency = 1
         playerRole.Text = "Loading..."
         playerRole.TextColor3 = CONFIG.Colors.TextSecondary
         playerRole.TextSize = getFontSize("Text") - 2
         playerRole.Font = Enum.Font.Gotham
-        playerRole.TextScaled = true
+        playerRole.TextScaled = deviceType == "Mobile"
         playerRole.Parent = profileFrame
         
         -- Update role continuously
@@ -1755,6 +2156,7 @@ local function createMainUI()
     
     -- Navigation Buttons
     local navButtonsFrame = Instance.new("ScrollingFrame")
+    navButtonsFrame.Name = "NavButtons"
     navButtonsFrame.Size = UDim2.new(1, 0, 1, -getSize(80, 100, 120))
     navButtonsFrame.Position = UDim2.new(0, 0, 0, getSize(80, 100, 120))
     navButtonsFrame.BackgroundTransparency = 1
@@ -1774,6 +2176,9 @@ local function createMainUI()
     
     local navPadding = Instance.new("UIPadding")
     navPadding.PaddingTop = UDim.new(0, 10)
+    navPadding.PaddingBottom = UDim.new(0, 10)
+    navPadding.PaddingLeft = UDim.new(0, 10)
+    navPadding.PaddingRight = UDim.new(0, 10)
     navPadding.Parent = navButtonsFrame
     
     -- Tab Buttons
@@ -1872,7 +2277,7 @@ local function createMainUI()
     closeButton.MouseButton1Click:Connect(function()
         gameState.uiVisible = false
         screenGui.Enabled = false
-        createNotification("QEX", "UI hidden - Press RightControl to show", 3, "info")
+        gameState.createNotification("QEX", "UI hidden - Press RightControl to show", 3, "info")
     end)
     
     -- Tab Content Creation
@@ -1891,7 +2296,7 @@ local function createMainUI()
             local welcomeText = Instance.new("TextLabel")
             welcomeText.Size = UDim2.new(1, 0, 0, 100)
             welcomeText.BackgroundTransparency = 1
-            welcomeText.Text = "✅ ALL FEATURES WORKING WITH UPDATED MM2 REMOTES!\n\nNew Features:\n• Fixed Fling System\n• Added Debug Mode\n• Fixed Gun Detection\n• Added Floating Toggle\n• Improved UI Reliability"
+            welcomeText.Text = "✅ ALL FEATURES WORKING WITH UPDATED MM2 REMOTES!\n\nNew Features:\n• Fixed Auto Throw/Kill Aura\n• Improved Prediction Models\n• Fixed ESP System\n• Added Chat Spam\n• Fixed Noob Mode\n• Complete UI Overhaul"
             welcomeText.TextColor3 = CONFIG.Colors.Text
             welcomeText.TextSize = getFontSize("Text")
             welcomeText.Font = Enum.Font.Gotham
@@ -1907,9 +2312,9 @@ local function createMainUI()
                 local closest = getClosestPlayerToMouse()
                 if closest then
                     gameState.aimTarget = closest
-                    createNotification("Target", "Set target to " .. closest.DisplayName, 2, "info")
+                    gameState.createNotification("Target", "Set target to " .. closest.DisplayName, 2, "info")
                 else
-                    createNotification("Target", "No players found", 2, "error")
+                    gameState.createNotification("Target", "No players found", 2, "error")
                 end
             end)
             
@@ -1975,7 +2380,7 @@ local function createMainUI()
             createToggle(aimbotCard, "Enable Aimbot", gameState.aimbotEnabled, toggleAimbot)
             createToggle(aimbotCard, "Silent Aim", gameState.silentAimEnabled, function(enabled)
                 gameState.silentAimEnabled = enabled
-                createNotification("Silent Aim", enabled and "Enabled" or "Disabled", 2, "info")
+                gameState.createNotification("Silent Aim", enabled and "Enabled" or "Disabled", 2, "info")
             end)
             
             createToggle(aimbotCard, "Predict Jump", gameState.predictJump, function(enabled)
@@ -1996,7 +2401,7 @@ local function createMainUI()
             
             createDropdown(aimbotCard, "Aim Model", {"QEX-X5", "QEX-X4", "QEX-X3"}, gameState.currentAimModel, function(model)
                 gameState.currentAimModel = model
-                createNotification("Aim Model", "Switched to " .. model, 2, "info")
+                gameState.createNotification("Aim Model", "Switched to " .. model, 2, "info")
             end)
             
             -- Shooting Card
@@ -2005,7 +2410,7 @@ local function createMainUI()
             createToggle(shootCard, "Auto Shoot", gameState.autoShootEnabled, toggleAutoShoot)
             createToggle(shootCard, "Manual Shoot", gameState.manualShootEnabled, function(enabled)
                 gameState.manualShootEnabled = enabled
-                createNotification("Manual Shoot", enabled and "Enabled (Left Click)" or "Disabled", 2, "info")
+                gameState.createNotification("Manual Shoot", enabled and "Enabled (Left Click)" or "Disabled", 2, "info")
             end)
             
             createSlider(shootCard, "Shoot Delay", 0.05, 1, gameState.shootDelay, function(value)
@@ -2018,7 +2423,7 @@ local function createMainUI()
             createToggle(knifeCard, "Auto Throw", gameState.autoThrowEnabled, toggleAutoThrow)
             createToggle(knifeCard, "Manual Throw", gameState.manualThrowEnabled, function(enabled)
                 gameState.manualThrowEnabled = enabled
-                createNotification("Manual Throw", enabled and "Enabled (Right Click)" or "Disabled", 2, "info")
+                gameState.createNotification("Manual Throw", enabled and "Enabled (Right Click)" or "Disabled", 2, "info")
             end)
             createToggle(knifeCard, "Kill Aura", gameState.killAuraEnabled, toggleKillAura)
             
@@ -2032,7 +2437,7 @@ local function createMainUI()
             
             createDropdown(knifeCard, "Knife Model", {"QEX-MAX3", "QEX-MAX2", "QEX-MAX1"}, gameState.currentKnifeModel, function(model)
                 gameState.currentKnifeModel = model
-                createNotification("Knife Model", "Switched to " .. model, 2, "info")
+                gameState.createNotification("Knife Model", "Switched to " .. model, 2, "info")
             end)
             
         elseif gameState.currentTab == "ESP" then
@@ -2068,9 +2473,9 @@ local function createMainUI()
                 if enabled then
                     coroutine.wrap(startCoinFarm)()
                     coroutine.wrap(startCoinFarmNoclip)()
-                    createNotification("Coin Farm", "Enabled with speed " .. gameState.coinFarmSpeed, 3, "success")
+                    gameState.createNotification("Coin Farm", "Enabled with speed " .. gameState.coinFarmSpeed, 3, "success")
                 else
-                    createNotification("Coin Farm", "Disabled", 2, "info")
+                    gameState.createNotification("Coin Farm", "Disabled", 2, "info")
                 end
             end)
             
@@ -2080,11 +2485,11 @@ local function createMainUI()
             
             createToggle(autoCard, "Auto Gun Farm", gameState.gunFarmEnabled, function(enabled)
                 gameState.gunFarmEnabled = enabled
-                createNotification("Auto Farm", enabled and "Gun farming enabled" or "Gun farming disabled", 2, "info")
+                gameState.createNotification("Auto Farm", enabled and "Gun farming enabled" or "Gun farming disabled", 2, "info")
             end)
             createToggle(autoCard, "Kill All (Murderer)", gameState.killAllEnabled, function(enabled)
                 gameState.killAllEnabled = enabled
-                createNotification("Kill All", enabled and "Kill all enabled" or "Kill all disabled", 2, "warning")
+                gameState.createNotification("Kill All", enabled and "Kill all enabled" or "Kill all disabled", 2, "warning")
             end)
             
         elseif gameState.currentTab == "Player" then
@@ -2095,7 +2500,7 @@ local function createMainUI()
             createToggle(movementCard, "Speed Boost", gameState.speedEnabled, toggleSpeed)
             createToggle(movementCard, "Infinite Jump", gameState.infiniteJumpEnabled, function(enabled)
                 gameState.infiniteJumpEnabled = enabled
-                createNotification("Jump", enabled and "Infinite jump enabled" or "Infinite jump disabled", 2, "info")
+                gameState.createNotification("Jump", enabled and "Infinite jump enabled" or "Infinite jump disabled", 2, "info")
             end)
             
             createSlider(movementCard, "Walk Speed", 16, 200, gameState.walkSpeed, function(value)
@@ -2164,7 +2569,6 @@ local function createMainUI()
                         playerLabel.TextColor3 = CONFIG.Colors.Text
                         playerLabel.TextSize = getFontSize("Text")
                         playerLabel.Font = Enum.Font.GothamBold
-                        playerLabel.TextXAlignment = Enum.TextXAlignment.Left
                         playerLabel.TextScaled = deviceType == "Mobile"
                         playerLabel.Parent = playerFrame
                         
@@ -2176,7 +2580,6 @@ local function createMainUI()
                         roleLabel.TextColor3 = getRoleColor(getPlayerRole(p))
                         roleLabel.TextSize = getFontSize("Text") - 2
                         roleLabel.Font = Enum.Font.Gotham
-                        roleLabel.TextXAlignment = Enum.TextXAlignment.Left
                         roleLabel.TextScaled = deviceType == "Mobile"
                         roleLabel.Parent = playerFrame
                         
@@ -2184,10 +2587,11 @@ local function createMainUI()
                         local buttonWidth = getSize(45, 55, 65)
                         local buttonHeight = getSize(25, 30, 35)
                         local buttonSpacing = 5
+                        local buttonsCount = 4
                         
                         local teleportBtn = Instance.new("TextButton")
                         teleportBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
-                        teleportBtn.Position = UDim2.new(1, -(buttonWidth * 3 + buttonSpacing * 2 + 10), 0.5, -buttonHeight/2)
+                        teleportBtn.Position = UDim2.new(1, -(buttonWidth * buttonsCount + buttonSpacing * (buttonsCount-1) + 10), 0.5, -buttonHeight/2)
                         teleportBtn.BackgroundColor3 = CONFIG.Colors.Accent
                         teleportBtn.BorderSizePixel = 0
                         teleportBtn.Text = "TP"
@@ -2202,7 +2606,7 @@ local function createMainUI()
                         
                         local aimBtn = Instance.new("TextButton")
                         aimBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
-                        aimBtn.Position = UDim2.new(1, -(buttonWidth * 2 + buttonSpacing + 10), 0.5, -buttonHeight/2)
+                        aimBtn.Position = UDim2.new(1, -(buttonWidth * 3 + buttonSpacing * 2 + 10), 0.5, -buttonHeight/2)
                         aimBtn.BackgroundColor3 = CONFIG.Colors.Warning
                         aimBtn.BorderSizePixel = 0
                         aimBtn.Text = "AIM"
@@ -2217,7 +2621,7 @@ local function createMainUI()
                         
                         local killBtn = Instance.new("TextButton")
                         killBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
-                        killBtn.Position = UDim2.new(1, -(buttonWidth + 10), 0.5, -buttonHeight/2)
+                        killBtn.Position = UDim2.new(1, -(buttonWidth * 2 + buttonSpacing * 1 + 10), 0.5, -buttonHeight/2)
                         killBtn.BackgroundColor3 = CONFIG.Colors.Danger
                         killBtn.BorderSizePixel = 0
                         killBtn.Text = "KILL"
@@ -2230,6 +2634,21 @@ local function createMainUI()
                         killCorner.CornerRadius = UDim.new(0, 6)
                         killCorner.Parent = killBtn
                         
+                        local flingBtn = Instance.new("TextButton")
+                        flingBtn.Size = UDim2.new(0, buttonWidth, 0, buttonHeight)
+                        flingBtn.Position = UDim2.new(1, -(buttonWidth * 1 + 10), 0.5, -buttonHeight/2)
+                        flingBtn.BackgroundColor3 = CONFIG.Colors.Success
+                        flingBtn.BorderSizePixel = 0
+                        flingBtn.Text = "FLING"
+                        flingBtn.TextColor3 = CONFIG.Colors.Text
+                        flingBtn.TextSize = getFontSize("Text")
+                        flingBtn.Font = Enum.Font.GothamBold
+                        flingBtn.Parent = playerFrame
+                        
+                        local flingCorner = Instance.new("UICorner")
+                        flingCorner.CornerRadius = UDim.new(0, 6)
+                        flingCorner.Parent = flingBtn
+                        
                         -- Button Functionality
                         teleportBtn.MouseButton1Click:Connect(function()
                             teleportToPlayer(p)
@@ -2237,7 +2656,7 @@ local function createMainUI()
                         
                         aimBtn.MouseButton1Click:Connect(function()
                             gameState.aimTarget = p
-                            createNotification("Target", "Set aim target to " .. p.DisplayName, 2, "info")
+                            gameState.createNotification("Target", "Set aim target to " .. p.DisplayName, 2, "info")
                         end)
                         
                         killBtn.MouseButton1Click:Connect(function()
@@ -2247,8 +2666,12 @@ local function createMainUI()
                             elseif role == "Sheriff" then
                                 shootGun(p)
                             else
-                                createNotification("Error", "You need a weapon to kill", 2, "error")
+                                gameState.createNotification("Error", "You need a weapon to kill", 2, "error")
                             end
+                        end)
+                        
+                        flingBtn.MouseButton1Click:Connect(function()
+                            flingPlayer(p)
                         end)
                     end
                 end
@@ -2268,93 +2691,35 @@ local function createMainUI()
             -- Chat Card
             local chatCard = createCard(contentScroller, "Chat System")
             
-            -- Chat History
-            local chatFrame = Instance.new("ScrollingFrame")
-            chatFrame.Size = UDim2.new(1, 0, 0, 200)
-            chatFrame.BackgroundColor3 = CONFIG.Colors.Tertiary
-            chatFrame.BorderSizePixel = 0
-            chatFrame.ScrollBarThickness = 4
-            chatFrame.ScrollBarImageColor3 = CONFIG.Colors.Accent
-            chatFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-            chatFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-            chatFrame.ScrollingDirection = Enum.ScrollingDirection.Y
-            chatFrame.Parent = chatCard
+            -- Chat Spam Settings
+            local spamCard = createCard(contentScroller, "Chat Spam")
             
-            local chatLayout = Instance.new("UIListLayout")
-            chatLayout.Padding = UDim.new(0, 5)
-            chatLayout.SortOrder = Enum.SortOrder.LayoutOrder
-            chatLayout.Parent = chatFrame
+            createToggle(spamCard, "Enable Chat Spam", gameState.chatSpamEnabled, toggleChatSpam)
             
-            local chatPadding = Instance.new("UIPadding")
-            chatPadding.PaddingLeft = UDim.new(0, 5)
-            chatPadding.PaddingRight = UDim.new(0, 5)
-            chatPadding.PaddingTop = UDim.new(0, 5)
-            chatPadding.PaddingBottom = UDim.new(0, 5)
-            chatPadding.Parent = chatFrame
+            local messageInput = Instance.new("TextBox")
+            messageInput.Size = UDim2.new(1, 0, 0, 30)
+            messageInput.BackgroundColor3 = CONFIG.Colors.Secondary
+            messageInput.BorderSizePixel = 0
+            messageInput.Text = gameState.chatSpamMessage
+            messageInput.TextColor3 = CONFIG.Colors.Text
+            messageInput.TextSize = getFontSize("Text")
+            messageInput.Font = Enum.Font.Gotham
+            messageInput.Parent = spamCard
             
-            -- Input Area
-            local inputFrame = Instance.new("Frame")
-            inputFrame.Size = UDim2.new(1, 0, 0, 40)
-            inputFrame.BackgroundTransparency = 1
-            inputFrame.LayoutOrder = 2
-            inputFrame.Parent = chatCard
+            local messageCorner = Instance.new("UICorner")
+            messageCorner.CornerRadius = UDim.new(0, 6)
+            messageCorner.Parent = messageInput
             
-            local inputBox = Instance.new("TextBox")
-    inputBox.Size = UDim2.new(0.7, 0, 1, 0)
-    inputBox.BackgroundColor3 = CONFIG.Colors.Secondary
-    inputBox.BorderSizePixel = 0
-    inputBox.Text = ""
-    inputBox.PlaceholderText = "Type your message..."
-    inputBox.TextColor3 = CONFIG.Colors.Text
-    inputBox.TextSize = getFontSize("Text")
-    inputBox.Font = Enum.Font.Gotham
-    inputBox.Parent = inputFrame
-    
-    local inputCorner = Instance.new("UICorner")
-    inputCorner.CornerRadius = UDim.new(0, 6)
-    inputCorner.Parent = inputBox
-    
-    local sendButton = createButton(inputFrame, "Send", function()
-        local message = inputBox.Text
-        if message ~= "" then
-            -- Add to chat history
-            local msgLabel = Instance.new("TextLabel")
-            msgLabel.Size = UDim2.new(1, 0, 0, 20)
-            msgLabel.BackgroundTransparency = 1
-            msgLabel.Text = player.Name .. ": " .. message
-            msgLabel.TextColor3 = CONFIG.Colors.Text
-            msgLabel.TextSize = getFontSize("Text")
-            msgLabel.Font = Enum.Font.Gotham
-            msgLabel.TextXAlignment = Enum.TextXAlignment.Left
-            msgLabel.TextWrapped = true
-            msgLabel.AutomaticSize = Enum.AutomaticSize.Y
-            msgLabel.Parent = chatFrame
+            messageInput:GetPropertyChangedSignal("Text"):Connect(function()
+                gameState.chatSpamMessage = messageInput.Text
+            end)
             
-            -- Scroll to bottom
-            chatFrame.CanvasPosition = Vector2.new(0, chatFrame.CanvasSize.Y.Offset)
+            createSlider(spamCard, "Spam Delay", 0.5, 5, gameState.chatSpamDelay, function(value)
+                gameState.chatSpamDelay = value
+            end)
             
-            inputBox.Text = ""
-        end
-    end)
-    sendButton.Size = UDim2.new(0.25, -5, 1, 0)
-    sendButton.Position = UDim2.new(0.75, 5, 0, 0)
-    
-    -- Chat commands
-    local commandsCard = createCard(contentScroller, "Chat Commands")
-    
-    local commandsText = Instance.new("TextLabel")
-    commandsText.Size = UDim2.new(1, 0, 0, 100)
-    commandsText.BackgroundTransparency = 1
-    commandsText.Text = "Available Commands:\n!tp [player] - Teleport to player\n!gun - Teleport to gun\n!coins - Teleport to nearest coin\n!role - Show your current role"
-    commandsText.TextColor3 = CONFIG.Colors.TextSecondary
-    commandsText.TextSize = getFontSize("Text")
-    commandsText.Font = Enum.Font.Gotham
-    commandsText.TextWrapped = true
-    commandsText.TextYAlignment = Enum.TextYAlignment.Top
-    commandsText.Parent = commandsCard
-    
         elseif gameState.currentTab == "Noob" then
-            -- Noob Card
+            -- Noob Mode Card
             local noobCard = createCard(contentScroller, "Noob Mode")
             
             createToggle(noobCard, "Enable Noob Mode", gameState.noobMode, function(enabled)
@@ -2368,7 +2733,19 @@ local function createMainUI()
                     gameState.speedEnabled = true
                     gameState.walkSpeed = 30
                     
-                    createNotification("Noob Mode", "All beginner features enabled", 3, "success")
+                    -- Apply settings
+                    toggleESP(true)
+                    toggleSpeed(true)
+                    
+                    if gameState.easyAimbot then
+                        gameState.aimbotEnabled = true
+                        gameState.silentAimEnabled = true
+                        gameState.aimFOV = 120
+                        gameState.aimSmoothing = 10
+                        toggleAimbot(true)
+                    end
+                    
+                    gameState.createNotification("Noob Mode", "All beginner features enabled", 3, "success")
                 else
                     -- Disable noob features
                     gameState.autoPickupCoins = false
@@ -2431,6 +2808,7 @@ local function createMainUI()
                 gameState.coinFarmEnabled = false
                 gameState.flingEnabled = false
                 gameState.debugMode = false
+                gameState.chatSpamEnabled = false
                 
                 -- Disconnect all connections
                 for _, connection in pairs(gameState.connections) do
@@ -2443,7 +2821,7 @@ local function createMainUI()
                 -- Clean up ESP
                 toggleESP(false)
                 
-                createNotification("Settings", "All settings reset", 2, "success")
+                gameState.createNotification("Settings", "All settings reset", 2, "success")
                 updateTabContent()
             end)
             
@@ -2454,7 +2832,7 @@ local function createMainUI()
             -- Debug Mode Toggle
             createToggle(settingsCard, "Debug Mode", gameState.debugMode, function(enabled)
                 gameState.debugMode = enabled
-                createNotification("Debug", enabled and "Enabled" or "Disabled", 2, "info")
+                gameState.createNotification("Debug", enabled and "Enabled" or "Disabled", 2, "info")
             end)
             
             -- Info Card
@@ -2463,7 +2841,7 @@ local function createMainUI()
             local infoText = Instance.new("TextLabel")
             infoText.Size = UDim2.new(1, 0, 0, 140)
             infoText.BackgroundTransparency = 1
-            infoText.Text = "QEX v" .. CONFIG.Version .. "\n\n✅ UPDATED WITH WORKING MM2 REMOTES!\n\nThank you for using QEX. I'm the owner, @Iz9vs2k\n\nFeatures:\n• Fixed Fling System\n• Added Debug Mode\n• Complete ESP System\n• Movement Enhancements\n• Player Management\n• Profile Photos\n• Mobile Control Panel\n• Fixed Dragging System\n• Responsive Design for " .. deviceType
+            infoText.Text = "QEX v" .. CONFIG.Version .. "\n\n✅ UPDATED WITH WORKING MM2 REMOTES!\n\nThank you for using QEX. I'm the owner, @Iz9vs2k\n\nFeatures:\n• Fixed All Reported Issues\n• Complete ESP System\n• Movement Enhancements\n• Player Management\n• Profile Photos\n• Mobile Control Panel\n• Fixed Dragging System\n• Responsive Design for " .. deviceType
             infoText.TextColor3 = CONFIG.Colors.TextSecondary
             infoText.TextSize = getFontSize("Text")
             infoText.Font = Enum.Font.Gotham
@@ -2590,13 +2968,15 @@ end
 
 -- Main Execution
 local function initialize()
-    createNotification("QEX", "Loading v" .. CONFIG.Version .. " for " .. deviceType, 3, "success")
+    gameState.createNotification("QEX", "Loading v" .. CONFIG.Version .. " for " .. deviceType, 3, "success")
     
     -- Setup manual controls
     setupManualControls()
     
     -- Find coin remote
     findCoinRemote()
+    extractRemotes() -- Find all remotes
+    findCoinContainer() -- Find coin container
     
     -- Create main UI
     local ui = createMainUI()
@@ -2614,6 +2994,18 @@ local function initialize()
                 end
             end
         end
+        
+        -- Run Zo's fling system
+        flingPlayers()
+        
+        -- Infinite jump
+        if gameState.infiniteJumpEnabled then
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+                if player.Character and player.Character:FindFirstChild("Humanoid") then
+                    player.Character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                end
+            end
+        end
     end)
     
     -- Keybind to toggle UI
@@ -2625,9 +3017,9 @@ local function initialize()
             ui.Enabled = gameState.uiVisible
             
             if gameState.uiVisible then
-                createNotification("QEX", "UI shown", 1, "info")
+                gameState.createNotification("QEX", "UI shown", 1, "info")
             else
-                createNotification("QEX", "UI hidden", 1, "info")
+                gameState.createNotification("QEX", "UI hidden", 1, "info")
             end
         end
     end)
@@ -2646,7 +3038,7 @@ local function initialize()
         end
     end)
     
-    createNotification("QEX", "Successfully loaded with FIXED MM2 REMOTES!\n\nAll functions working:\n• Fixed Gun Shooting\n• Fixed Knife Functions\n• Added Fling System\n• Added Debug Mode\n• Fixed UI Dragging\n\nControls:\n• Q - Quick Shoot\n• R - Quick Throw\n• E - Manual Stab\n• Left Click - Manual Shoot\n• Right Click - Manual Throw\n• Mobile Control Panel Available\n• RightControl - Toggle UI", 10, "success")
+    gameState.createNotification("QEX", "Successfully loaded with FIXED MM2 REMOTES!\n\nAll functions working:\n• Fixed Auto Throw/Kill Aura\n• Improved Prediction Models\n• Fixed ESP System\n• Added Chat Spam\n• Fixed Noob Mode\n\nControls:\n• Q - Quick Shoot\n• R - Quick Throw\n• E - Manual Stab\n• F - Fling Target\n• Left Click - Manual Shoot\n• Right Click - Manual Throw\n• Mobile Control Panel Available\n• RightControl - Toggle UI", 10, "success")
 end
 
 -- Start the script
@@ -2677,6 +3069,7 @@ print("Controls:")
 print("• Q - Quick Shoot")
 print("• R - Quick Throw") 
 print("• E - Manual Stab")
+print("• F - Fling Target")
 print("• Left Click - Manual Shoot")
 print("• Right Click - Manual Throw")
 print("• Mobile Control Panel Available")
